@@ -173,8 +173,14 @@ xmnt_move(int mfd, int mpfd, const path &mpfile = {}, int flags = 0)
   xmnt_move(mfd, path{}, mpfd, mpfile, flags);
 }
 
-void xmnt_setattr(int fd, const mount_attr &a,
+void xmnt_setattr(int fd, const path &file, const mount_attr &a,
                   unsigned int flags = AT_RECURSIVE);
+inline void
+xmnt_setattr(int fd, const mount_attr &a, unsigned int flags = AT_RECURSIVE)
+{
+  xmnt_setattr(fd, {}, a, flags);
+}
+
 void xmnt_propagate(int fd, std::uint64_t propagation, bool recursive = true);
 
 template<std::convertible_to<const char *>... Opt>

@@ -83,11 +83,12 @@ xmnt_move(int mfd, const path &mfile, int mpfd, const path &mpfile, int flags)
 }
 
 void
-xmnt_setattr(int fd, const mount_attr &a, unsigned int flags)
+xmnt_setattr(int fd, const path &file, const mount_attr &a, unsigned int flags)
 {
   flags |= AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW;
   // Why mount_setattr takes a non-const mount_attr I don't understand...
-  if (mount_setattr(fd, "", flags, const_cast<mount_attr *>(&a), sizeof(a)))
+  if (mount_setattr(fd, file.c_str(), flags, const_cast<mount_attr *>(&a),
+                    sizeof(a)))
     syserr("mount_setattr({})", fdpath(fd));
 }
 

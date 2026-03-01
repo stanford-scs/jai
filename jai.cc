@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <filesystem>
 #include <print>
 
 #include <acl/libacl.h>
@@ -12,6 +13,7 @@
 #include <pwd.h>
 #include <sched.h>
 #include <sys/file.h>
+#include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -44,8 +46,7 @@ struct Config {
     run_jai_user_fd_.reset();
   }
 
-  Fd make_ns();
-  int make_ns_child();
+  Fd make_ns(const std::vector<path> &);
 
   void unmount();
 
@@ -63,13 +64,14 @@ struct Config {
 };
 
 static std::expected<Fd, Defer>
-lock_or_validate_file(int dfd, const path &file, int flags, auto &&validate)
-    requires requires {
-      { validate(1) } -> std::convertible_to<bool>;
-    }
+lock_or_validate_file(int dfd, const path &file, int flags, auto &&validate,
+                      path lockfile = {}) requires requires {
+  { validate(1) } -> std::convertible_to<bool>;
+}
 {
   assert(!file.empty());
-  path lockfile = cat(file, ".lock");
+  if (lockfile.empty())
+    lockfile = cat(file, ".lock");
   flags |= O_NOFOLLOW | O_CLOEXEC;
 
   return lock_or_validate(dfd, lockfile, [&] -> Fd {
@@ -253,6 +255,12 @@ Config::make_blacklist(int dfd, path name)
 Fd
 Config::make_home_overlay()
 {
+  auto r = lock_or_validate_file(
+      run_jai_user(), "home", O_RDONLY | O_DIRECTORY,
+      [](int fd) { return is_mountpoint(fd); }, ".lock");
+  if (r)
+    return std::move(*r);
+
   Fd sandboxed_home = ensure_dir(run_jai_user(), kSB, 0755, kFollow, true);
   if (is_mountpoint(*sandboxed_home))
     return sandboxed_home;
@@ -280,6 +288,12 @@ Config::make_home_overlay()
 Fd
 Config::make_private_tmp()
 {
+  auto r = lock_or_validate_file(
+      run_jai_user(), "tmp", O_RDONLY | O_DIRECTORY,
+      [](int fd) { return is_mountpoint(fd); }, ".lock");
+  if (r)
+    return std::move(*r);
+
   Fd tmp = ensure_dir(run_jai_user(), "tmp", 0755, kFollow);
   if (is_mountpoint(*tmp))
     return tmp;
@@ -288,127 +302,61 @@ Config::make_private_tmp()
 }
 
 Fd
-Config::make_ns()
+Config::make_ns(const std::vector<path> &dirs)
 {
-  auto r = lock_or_validate_file(run_jai_user(), "ns", O_RDONLY,
-                                 [](int fd) { return is_mountpoint(fd); });
-  if (r)
-    return std::move(*r);
+  Fd oldns = xopenat(-1, "/proc/self/ns/mnt", O_RDONLY);
+  Defer restore{[fd = *oldns] { setns(fd, CLONE_NEWNS); }};
 
-  make_home_overlay();
-  make_private_tmp();
+  Fd tmp = clone_tree(*make_private_tmp());
+  Fd home = clone_tree(*make_home_overlay());
 
-  int pid = -1;
-  auto stack = std::make_unique<std::array<char, 0x10'0000>>();
-  Defer reap([&pid] {
-    if (pid > 0)
-      while (waitpid(pid, nullptr, 0) == -1 && errno == EINTR)
-        ;
-  });
-
-  Fd pipefds[2];
-  if (int fds[2]; pipe(fds))
-    syserr("pipe");
-  else
-    std::ranges::copy(fds, pipefds);
-
-  struct CS {
-    Fd *pipefds;
-    Config *c;
-  } child_state = {pipefds, this};
-
-  pid = clone(
-      +[](void *_cs) -> int {
-        auto cs = static_cast<CS *>(_cs);
-        cs->pipefds[1].reset();
-        int r = 1;
-        try {
-          r = cs->c->make_ns_child();
-          char c;
-          read(*cs->pipefds[0], &c, 1);
-        } catch (const std::exception &e) {
-          std::println(stderr, "{}", e.what());
-          fflush(stderr);
-        }
-        return r;
-      },
-      stack->data() + stack->size(), CLONE_NEWNS | SIGCHLD, &child_state);
-
-  pipefds[0].reset();
-  Fd nsmnt =
-      clone_tree(*xopenat(-1, std::format("/proc/{}/ns/mnt", pid), O_RDONLY));
-  xmnt_propagate(*nsmnt, MS_PRIVATE);
-  pipefds[1].reset();
-  reap.release();
-  int status;
-  while (waitpid(pid, &status, 0) && errno == EINTR)
-    ;
-  if (status)
-    err("failed to create new namespace");
-  Fd ns = xopenat(run_jai_user(), "ns", O_CREAT | O_RDWR, 0600);
-  xmnt_move(*nsmnt, *ns);
-  return nsmnt;
-}
-
-int
-Config::make_ns_child()
-{
-  reset();
-  const path mnt = "/mnt";
-  const path mrj = mnt / path{kRunRoot}.relative_path();
-  auto oldroot = xopenat(-1, "/", O_PATH);
-  xmnt_propagate(*oldroot, MS_SLAVE, true);
-  Fd newroot = clone_tree(*oldroot, {}, true);
-  xmnt_setattr(*newroot,
+  unshare(CLONE_NEWNS);
+  Fd newns = xopenat(-1, "/proc/self/ns/mnt", O_RDONLY);
+  xmnt_setattr(-1, "/",
                mount_attr{
                    .attr_set = MOUNT_ATTR_RDONLY,
                    .propagation = MS_PRIVATE,
-               },
-               AT_RECURSIVE);
-  xmnt_move(*newroot, -1, mnt);
-  umount2(mrj.c_str(), MNT_DETACH);
-  xmnt_move(-1, kRunRoot, -1, mrj.c_str(), 0);
-
-  if (chdir(mnt.c_str()))
-    syserr(R"(chdir("{}"))", mnt.string());
-  if (syscall(SYS_pivot_root, ".", "."))
-    syserr("pivot_root");
-  if (umount2(".", MNT_DETACH))
-    syserr("umount2 root after pivot");
-  if (chdir("/"))
-    syserr(R"(chdir("/"))");
-
-  umount2("/tmp", MNT_DETACH);     // ignore errors
-  umount2("/var/tmp", MNT_DETACH); // ignore errors
-
-  auto tmp = xopenat(run_jai_user(), "tmp", O_DIRECTORY | O_PATH | O_NOFOLLOW);
-  xmnt_move(*clone_tree(*tmp), -1, "/tmp");
-  xmnt_move(*clone_tree(*tmp), -1, "/var/tmp");
-  tmp.reset();
-
-  Fd newhome = xopenat(-1, homepath_.c_str(), O_RDONLY | O_NOFOLLOW);
-  check_user(*newhome);
-  auto sandboxed_home =
-      xopenat(run_jai_user(), kSB, O_RDONLY | O_NOFOLLOW | O_DIRECTORY);
-  xmnt_move(*clone_tree(*sandboxed_home), *newhome);
+               });
 
   if (umount2(kRunRoot, MNT_DETACH))
-    syserr(R"(umount2("{}"))", kRunRoot);
+    syserr("umount2({}, MNT_DETACH)", kRunRoot);
+  umount2("/tmp", MNT_DETACH);     // ignore error
+  umount2("/var/tmp", MNT_DETACH); // ignore error
+  xmnt_move(*tmp, -1, "/tmp");
+  xmnt_move(*clone_tree(-1, "/tmp"), -1, "/var/tmp", 0);
+  xmnt_move(*home, -1, homepath_);
 
-  return 0;
+  for (auto d : dirs) {
+    if (d.is_relative())
+      d = "/" / d;
+    setns(*oldns, CLONE_NEWNS);
+    Fd src = clone_tree(*xopenat(-1, d, O_DIRECTORY | O_PATH));
+    check_user(*src);
+    setns(*newns, CLONE_NEWNS);
+    Fd dst = xopenat(-1, d, O_DIRECTORY | O_PATH);
+    check_user(*dst);
+    xmnt_move(*src, *dst);
+  }
+
+  restore.reset();
+  // XXX - for testing
+  Fd ns = xopenat(run_jai_user(), "ns", O_CREAT | O_RDWR, 0600);
+  xmnt_move(*clone_tree(*newns), *ns);
+
+  return newns;
 }
 
 void
 Config::unmount()
 {
   Fd lock;
-  while (!(lock = open_lockfile(run_jai_user(), "ns.lock")))
+  while (!(lock = open_lockfile(run_jai_user(), ".lock")))
     ;
   recursive_umount(path(kRunRoot) / user_);
   unlinkat(run_jai_user(), "tmp", AT_REMOVEDIR);
   unlinkat(run_jai_user(), kSB, AT_REMOVEDIR);
   unlinkat(run_jai_user(), "ns", 0);
-  unlinkat(run_jai_user(), "ns.lock", 0);
+  unlinkat(run_jai_user(), ".lock", 0);
   lock.reset();
   unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
 }
@@ -465,7 +413,8 @@ main(int argc, char **argv)
       exit(0);
     }
 
-    auto fd = conf.make_ns();
+    auto fd = conf.make_ns(opt_d);
+    exit(0);
   };
 
 #if 1
