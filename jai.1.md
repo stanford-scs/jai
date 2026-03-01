@@ -43,6 +43,11 @@ system outside your home directory is read-only.  If that works, exit
 your shell and run `jai` _code-assistant_ for your favorite code
 assistant.
 
+If you forget to export some directory that you wanted the sandboxed
+tool to update, you will find changed files in `$HOME/.jai/changes`.
+You can destroy the sandbox with `jai -u`, move the changed files back
+into your home directory, and restart `jai`.
+
 # EXAMPLES
 
     jai -d ~/.claude claude
