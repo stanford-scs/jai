@@ -68,8 +68,8 @@ flag.
 `-D`
 : By default, `jai` grants access to the current working directory
   even if it is not specified with `-d`.  This option suppresses that
-  option.  If you run with `-D` and no `-d` options, your entire home
-  directory will be copy-on-write and nothing will be directly
+  behavior.  If you run with `-D` and no `-d` options, your entire
+  home directory will be copy-on-write and nothing will be directly
   exported.
 
 `-u`
