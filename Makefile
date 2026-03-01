@@ -27,10 +27,11 @@ jai.1: jai.1.md
 
 install: all
 	install -D -o root -m 04511 -t $(DESTDIR)$(PREFIX)/bin jai
-	install -D -t $(DESTDIR)$(PREFIX)/share/man jai.1
+	install -D -t $(DESTDIR)$(PREFIX)/share/man/man1 jai.1
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/jai $(DESTDIR)$(PREFIX)/share/man/jai.1
+	rm -f $(DESTDIR)$(PREFIX)/bin/jai \
+		$(DESTDIR)$(PREFIX)/share/man/man1/jai.1
 
 clean:
 	rm -f jai *~ *.o
