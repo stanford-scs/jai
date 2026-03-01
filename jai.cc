@@ -47,6 +47,8 @@ struct Config {
   Fd make_ns();
   int make_ns_child();
 
+  void unmount();
+
   [[nodiscard]] Defer asuser();
   void check_user(int fd);
 
@@ -174,7 +176,7 @@ Config::run_jai_user()
   if (run_jai_user_fd_)
     return *run_jai_user_fd_;
 
-  Fd dirfd = ensure_dir(run_jai(), user_, 0700, kNoFollow);
+  Fd dirfd = ensure_dir(run_jai(), user_, 0750, kNoFollow);
   RaiiHelper<acl_free, acl_t> acl = acl_get_fd(*dirfd);
   if (!acl)
     syserr("acl_get_fd");
@@ -354,7 +356,7 @@ Config::make_ns_child()
   const path mnt = "/mnt";
   const path mrj = mnt / path{kRunRoot}.relative_path();
   auto oldroot = xopenat(-1, "/", O_PATH);
-  xmnt_propagate(*oldroot, MS_PRIVATE, true);
+  xmnt_propagate(*oldroot, MS_SLAVE, true);
   Fd newroot = clone_tree(*oldroot, {}, true);
   xmnt_setattr(*newroot,
                mount_attr{
@@ -395,22 +397,85 @@ Config::make_ns_child()
   return 0;
 }
 
+void
+Config::unmount()
+{
+  Fd lock;
+  while (!(lock = open_lockfile(run_jai_user(), "ns.lock")))
+    ;
+  recursive_umount(path(kRunRoot) / user_);
+  unlinkat(run_jai_user(), "tmp", AT_REMOVEDIR);
+  unlinkat(run_jai_user(), kSB, AT_REMOVEDIR);
+  unlinkat(run_jai_user(), "ns", 0);
+  unlinkat(run_jai_user(), "ns.lock", 0);
+  lock.reset();
+  unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
+}
+
+[[noreturn]] static void
+usage(int status)
+{
+  std::println(status ? stderr : stdout, R"(usage:
+   {0}                            create sandboxed-home under {1}
+   {0} -u                         unmount sandboxed-home
+   {0} cmd [arg...]               run cmd with access to cwd
+   {0} -d dir [-d dir...] cmd...  run cmd with access to specified dirs)",
+               prog.filename().string(), kRunRoot);
+  exit(status);
+}
+
 int
 main(int argc, char **argv)
 {
   umask(022);
   if (argc > 0)
     prog = argv[0];
+  else
+    prog = "jai";
 
-#if 0
-  auto mps = mountpoints();
-  for (const auto &p : subtree_rev(mps, "/"))
-    std::println("{}", p.string());
-#endif
+  bool opt_u{};
+  std::vector<path> opt_d;
+
+  int opt;
+  while ((opt = getopt(argc, argv, "+d:uh")) != -1)
+    switch (opt) {
+    case 'd':
+      opt_d.push_back(optarg);
+      break;
+    case 'u':
+      opt_u = true;
+      break;
+    case 'h':
+      usage(0);
+    default:
+      usage(2);
+    }
+
+  std::vector<char *> cmd(argv + optind, argv + argc);
+  if (opt_u && (!opt_d.empty() || !cmd.empty()))
+    usage(2);
+
+  auto go = [&] {
+    Config conf;
+    conf.init();
+
+    if (opt_u) {
+      conf.unmount();
+      exit(0);
+    }
+
+    auto fd = conf.make_ns();
+  };
 
 #if 1
-  Config conf;
-  conf.init();
-  conf.make_ns();
+  go();                         // make exceptions crash
+#else
+  try {
+    go();
+  } catch (const std::exception &e) {
+    std::println(stderr, "{}: {}", prog.filename().string(), e.what());
+    return 1;
+  }
 #endif
+  return 0;
 }

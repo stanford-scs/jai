@@ -101,7 +101,8 @@ xmnt_propagate(int fd, std::uint64_t propagation, bool recursive)
 void
 recursive_umount(const path &tree)
 {
-  auto dirs = subtree_rev(mountpoints(), tree);
+  auto mps = mountpoints();
+  auto dirs = subtree_rev(mps, tree);
   for (const auto &dir : dirs) {
     if (umount2(dir.c_str(), UMOUNT_NOFOLLOW)) {
       std::println(stderr, R"(umount("{}"): {})", dir.string(),

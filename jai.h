@@ -220,9 +220,9 @@ bool is_mountpoint(int dfd, const path &file = {},
 // which case re-check the need for setup and try again.
 Fd open_lockfile(int dfd, const path &file);
 
-// If validate(get()) returns the result of get() in the expected
-// value.  Otherwise, acquires the lock and returns an error value
-// containing a Defer object that releases the lock.
+// If validate(get()) is true, returns the result of get() in the
+// expected value.  Otherwise, acquires the lock and returns an error
+// value containing a Defer object that releases the lock.
 //
 // Be careful not to destroy the return value.  This would be bad:
 //
