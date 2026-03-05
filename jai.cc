@@ -26,6 +26,14 @@ path prog;
 constexpr const char *kRunRoot = "/run/jai";
 constexpr const char *kSB = "sandboxed-home";
 
+#define xsetns(fd, type)                                                       \
+  do {                                                                         \
+    if (setns(fd, type)) {                                                     \
+      std::println(stderr, "setns({}, {})", fdpath(fd), #type);                \
+      exit(1);                                                                 \
+    }                                                                          \
+  } while (0)
+
 struct Config {
   std::string user_;
   uid_t uid_ = -1;
@@ -312,12 +320,7 @@ Fd
 Config::make_ns(const std::vector<path> &dirs)
 {
   Fd oldns = xopenat(-1, "/proc/self/ns/mnt", O_RDONLY | O_CLOEXEC);
-  Defer restore{[fd = *oldns] {
-    if (setns(fd, CLONE_NEWNS)) {
-      std::println("setns(CLONE_NEWNS): {}", strerror(errno));
-      exit(1);
-    }
-  }};
+  Defer restore{[fd = *oldns] { xsetns(fd, CLONE_NEWNS); }};
 
   const mount_attr attr{
       .attr_set = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV,
@@ -348,13 +351,11 @@ Config::make_ns(const std::vector<path> &dirs)
   for (auto d : dirs) {
     if (d.is_relative())
       d = "/" / d;
-    if (setns(*oldns, CLONE_NEWNS))
-      syserr("setns(CLONE_NEWNS)");
+    xsetns(*oldns, CLONE_NEWNS);
     Fd src = clone_tree(*xopenat(-1, d, O_DIRECTORY | O_PATH | O_CLOEXEC));
     check_user(*src, d);
     xmnt_setattr(*src, attr);
-    if (setns(*newns, CLONE_NEWNS))
-      syserr("setns(CLONE_NEWNS)");
+    xsetns(*newns, CLONE_NEWNS);
     Fd dst = xopenat(-1, d, O_DIRECTORY | O_PATH | O_CLOEXEC);
     check_user(*dst, d);
     xmnt_move(*src, *dst);
@@ -435,9 +436,8 @@ sanitize_env()
 void
 Config::run(int nsfd, const path &cwd, char **argv)
 {
-  if (setns(nsfd, CLONE_NEWNS))
-    syserr("setns(CLONE_NEWNS)");
-  if (unshare(CLONE_NEWPID))
+  xsetns(nsfd, CLONE_NEWNS);
+  if (unshare(CLONE_NEWPID | CLONE_NEWIPC))
     syserr("unshare(CLONE_NEWPID)");
 
   if (auto pid = fork(); pid < 0)
