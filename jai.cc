@@ -1,3 +1,4 @@
+#include "cred.h"
 #include "jai.h"
 
 #include <cassert>
@@ -8,9 +9,7 @@
 #include <acl/libacl.h>
 #include <dirent.h>
 #include <fcntl.h>
-#include <grp.h>
 #include <linux/futex.h>
-#include <pwd.h>
 #include <sched.h>
 #include <sys/file.h>
 #include <sys/mount.h>
@@ -29,7 +28,7 @@ constexpr const char *kSB = "sandboxed-home";
 #define xsetns(fd, type)                                                       \
   do {                                                                         \
     if (setns(fd, type)) {                                                     \
-      std::println(stderr, "setns({}, {})", fdpath(fd), #type);                \
+      syserr("setns({}, {})", fdpath(fd), #type);                              \
       exit(1);                                                                 \
     }                                                                          \
   } while (0)
@@ -47,7 +46,8 @@ struct Config {
   Fd run_jai_user_fd_;
 
   void init();
-  Fd make_ns(const std::vector<path> &);
+  Fd make_idmap_ns();
+  Fd make_mnt_ns(const std::vector<path> &);
   void exec(int nsfd, const path &cwd, char **argv);
   void unmount();
 
@@ -72,45 +72,19 @@ struct Config {
   Fd make_private_tmp();
 };
 
-template<typename Ent, auto IdFn, auto NamFn> struct DbEnt {
-  Ent *p_{};
-  Ent ent_;
-  std::vector<char> buf_;
-
-  DbEnt() noexcept = default;
-  DbEnt(DbEnt &&other) : p_(std::exchange(other.p_, nullptr)), ent_(other, ent_)
-  {
-    swap(buf_, other.buf_);
+PwEnt
+untrusted_user()
+{
+  if (PwEnt ret; ret.nam("jai")) {
+    if (ret->pw_uid && !strcmp(ret->pw_gecos, "JAI sandbox untrusted user") &&
+        !strcmp(ret->pw_dir, "/"))
+      return ret;
+    std::println(stderr,
+                 R"(Ignoring user jai because uid is 0, home dir is not "/" or
+GECOS field is not "JAI sandbox untrusted user")");
   }
-  DbEnt &operator=(DbEnt &&other) noexcept
-  {
-    p_ = std::exchange(other.p_, nullptr);
-    ent_ = other.ent_;
-    swap(buf_, other.buf_);
-    return *this;
-  }
-
-  explicit operator bool() const { return p_; }
-  const Ent *operator->() const { return p_; }
-
-  bool id(uid_t n) { return get(IdFn, n); }
-  bool nam(const char *n) { return get(NamFn, n); }
-
-  bool get(auto fn, auto key)
-  {
-    buf_.resize(std::max(128uz, buf_.capacity()));
-    for (;;) {
-      if (int r = fn(key, &ent_, buf_.data(), buf_.size(), &p_); !r)
-        return p_;
-      else if (r == ERANGE)
-        buf_.resize(2 * buf_.size());
-      else
-        errno = r, syserr("DbEnt<{}>::get", typeid(Ent).name());
-    }
-  }
-};
-using PwEnt = DbEnt<passwd, getpwuid_r, getpwnam_r>;
-using GrEnt = DbEnt<group, getgrgid_r, getgrnam_r>;
+  return {};
+}
 
 static std::expected<Fd, Defer>
 lock_or_validate_file(int dfd, const path &file, int flags, auto &&validate,
@@ -352,12 +326,54 @@ Config::make_private_tmp()
 }
 
 Fd
-Config::make_ns(const std::vector<path> &dirs)
+Config::make_idmap_ns()
+{
+  auto pw = untrusted_user();
+  if (!pw)
+    err("Could not find untrusted user jai for user map");
+
+  pid_t pid{-1};
+  Defer _reap([pid] {
+    if (pid > 0) {
+      int status;
+      while (waitpid(pid, &status, 0) == -1 && errno == EINTR)
+        ;
+    }
+  });
+  auto pfds = xpipe();
+  if (!(pid = xfork(CLONE_NEWUSER))) {
+    pfds[1].reset();
+    char c;
+    read(*pfds[0], &c, 1);
+    _exit(0);
+  }
+  pfds[0].reset();
+
+  path child = std::format("/proc/{}", pid);
+
+  Fd newns = xopenat(-1, child / "ns/user", O_RDONLY);
+
+  Fd mapctl = xopenat(-1, child / "gid_map", O_WRONLY);
+  auto map = make_id_map(gid_, pw->pw_gid);
+  if (write(*mapctl, map.data(), map.size()) == -1)
+    syserr("write(gid_map)");
+
+  mapctl = xopenat(-1, child / "uid_map", O_WRONLY);
+  map = make_id_map(uid_, pw->pw_uid);
+  if (write(*mapctl, map.data(), map.size()) == -1)
+    syserr("write(uid_map)");
+  mapctl.reset();
+
+  return newns;
+}
+
+Fd
+Config::make_mnt_ns(const std::vector<path> &dirs)
 {
   Fd oldns = xopenat(-1, "/proc/self/ns/mnt", O_RDONLY | O_CLOEXEC);
   Defer _restore_ns{[fd = *oldns] { xsetns(fd, CLONE_NEWNS); }};
 
-  const mount_attr attr{
+  mount_attr attr{
       .attr_set = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV,
       .propagation = MS_PRIVATE,
   };
@@ -365,10 +381,15 @@ Config::make_ns(const std::vector<path> &dirs)
   xmnt_setattr(*tmp, attr);
 
   Fd home;
+  Fd mapns;
   if (fake_home_.empty())
     home = clone_tree(*make_home_overlay());
-  else
+  else {
+    mapns = make_idmap_ns();
+    attr.attr_set |= MOUNT_ATTR_IDMAP;
+    attr.userns_fd = *mapns;
     home = clone_tree(*ensure_udir(home_jai(), fake_home_));
+  }
   xmnt_setattr(*home, attr);
 
   if (unshare(CLONE_NEWNS))
@@ -489,9 +510,7 @@ Config::exec(int nsfd, const path &cwd, char **argv)
   if (unshare(CLONE_NEWPID | CLONE_NEWIPC))
     syserr("unshare(CLONE_NEWPID)");
 
-  if (auto pid = fork(); pid < 0)
-    syserr("fork");
-  else if (pid != 0) {
+  if (auto pid = xfork()) {
     close(nsfd);
     int status;
     while (waitpid(pid, &status, 0) == -1 && errno == EINTR)
@@ -507,14 +526,13 @@ Config::exec(int nsfd, const path &cwd, char **argv)
 
   try {
     recursive_umount("/proc");
-    Fd conf = xfsopen("proc", "proc");
-    if (!conf)
-      syserr(R"(fsopen("proc"))");
-    xmnt_move(*make_mount(*conf, MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV |
-                                     MOUNT_ATTR_NOEXEC),
+    xmnt_move(*make_mount(*xfsopen("proc", "proc"), MOUNT_ATTR_NOSUID |
+                                                        MOUNT_ATTR_NODEV |
+                                                        MOUNT_ATTR_NOEXEC),
               -1, "/proc");
   } catch (const std::exception &e) {
     std::println(stderr, "{}: {}", prog.filename().string(), e.what());
+    fflush(stderr);
     _exit(1);
   }
 
@@ -611,7 +629,7 @@ do_main(int argc, char **argv)
     opt_d.emplace_back(cwd);
   }
 
-  auto fd = conf.make_ns(opt_d);
+  auto fd = conf.make_mnt_ns(opt_d);
   if (!cmd.empty()) {
     cmd.push_back(nullptr);
     conf.exec(*fd, cwd, cmd.data());
@@ -626,6 +644,9 @@ main(int argc, char **argv)
     prog = argv[0];
   else
     prog = "jai";
+
+  do_main(argc, argv);
+  return 0;
 
   try {
     do_main(argc, argv);

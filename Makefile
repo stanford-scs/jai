@@ -9,7 +9,7 @@ CXXFLAGS ?= -std=gnu++23 -Wall -Werror -ggdb
 CPPFLAGS += $(shell pkg-config --cflags mount libacl)
 LDLIBS += $(shell pkg-config --libs mount libacl)
 
-OBJS = fs.o jai.o
+OBJS = fs.o jai.o cred.o
 
 all: jai jai.1
 
@@ -19,7 +19,7 @@ jai: $(OBJS)
 .c.o:
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $<
 
-$(OBJS): jai.h
+$(OBJS): jai.h cred.h
 
 jai.1: jai.1.md
 	-pandoc -s -w man jai.1.md -o jai.1

@@ -16,9 +16,14 @@
 #include <utility>
 
 #include <fcntl.h>
+#include <grp.h>
+#include <linux/sched.h>
+#include <pwd.h>
+#include <signal.h>
 #include <sys/acl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 // Format error message and throw an exception that captures errno
@@ -281,6 +286,15 @@ xopenat(int dfd, const path &file, int flags, mode_t mode = 0755)
          open_flags_to_string(flags));
 }
 
+inline std::array<Fd, 2>
+xpipe()
+{
+  int fds[2];
+  if (pipe2(fds, O_CLOEXEC))
+    syserr("pipe2");
+  return {fds[0], fds[1]};
+}
+
 inline struct stat
 xfstat(int fd)
 {
@@ -290,6 +304,15 @@ xfstat(int fd)
   return sb;
 }
 
+inline pid_t
+xfork(std::uint64_t flags = 0)
+{
+  clone_args ca{.flags = flags, .exit_signal = SIGCHLD};
+  if (auto ret = syscall(SYS_clone3, &ca, sizeof(ca)); ret != -1)
+    return ret;
+  syserr("clone3");
+}
+
 using ACL = RaiiHelper<acl_free, acl_t>;
 
 enum AclType {
@@ -297,3 +320,4 @@ enum AclType {
   kAclDefault = ACL_TYPE_DEFAULT, // Set ACL for files created in directory
 };
 void set_fd_acl(int fd, const char *acltext, AclType which = kAclAccess);
+
