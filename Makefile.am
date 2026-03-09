@@ -27,8 +27,12 @@ install-exec-hook:
 	-chown root $(DESTDIR)$(bindir)/jai
 	-chmod 04511 $(DESTDIR)$(bindir)/jai
 
+install-data-hook:
+	test ! -r $(DESTDIR)/etc/passwd || systemd-sysusers --root=$(DESTDIR)/
+
 uninstall-hook:
 	@if gecos=$$(getent passwd jai 2>/dev/null | cut -d: -f5) \
 	    && test "$$gecos" = "JAI sandbox untrusted user"; then \
-	  echo "The jai user still exists. You may want to run: userdel jai"; \
+	  echo "userdel jai"; \
+	  userdel jai; \
 	fi

@@ -10,6 +10,7 @@
 #include <acl/libacl.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <linux/futex.h>
 #include <sched.h>
 #include <sys/file.h>
@@ -558,7 +559,7 @@ Config::exec(int nsfd, const path &cwd, char **argv)
 usage(int status)
 {
   std::println(status ? stderr : stdout,
-               R"(usage: {0} [-u | [-D] [-H NAME] [-d DIR ...] CMD [ARG...]]
+               R"(usage: {0} [-u | [-D] [-h NAME] [-d DIR ...] CMD [ARG...]]
    no arguments  create sandboxed-home under {1}
    -u            unmount sandboxed-home
    -h NAME       use $HOME/.jai/NAME as home directory
@@ -567,6 +568,15 @@ usage(int status)
                prog.filename().string(), kRunRoot);
   exit(status);
 }
+
+enum long_options {
+  OPT_VERSION = 256,
+  OPT_HELP = 257,
+};
+static const option long_options[] = {
+    {"version", no_argument, nullptr, OPT_VERSION},
+    {"help", no_argument, nullptr, OPT_HELP},
+    {nullptr, 0, nullptr, 0}};
 
 void
 do_main(int argc, char **argv)
@@ -580,7 +590,8 @@ do_main(int argc, char **argv)
   path cwd = canonical(std::filesystem::current_path());
 
   int opt;
-  while ((opt = getopt(argc, argv, "+d:Duh:H")) != -1)
+  while ((opt = getopt_long(argc, argv, "+d:Duh:H", long_options, nullptr)) !=
+         -1)
     switch (opt) {
     case 'd':
       opt_d.emplace_back(canonical(path(optarg)));
@@ -591,9 +602,6 @@ do_main(int argc, char **argv)
     case 'D':
       opt_D = true;
       break;
-    case 'H':
-      usage(0);
-      break;
     case 'h':
       conf.fake_home_ = optarg;
       if (conf.fake_home_.is_absolute() ||
@@ -603,6 +611,17 @@ do_main(int argc, char **argv)
         std::println(stderr, "{}: invalid home directory name", optarg);
         usage(2);
       }
+      break;
+    case OPT_VERSION:
+      std::println(R"({}
+Copyright (C) 2026 David Mazieres
+This program comes with NO WARRANTY, to the extent permitted by law.
+You may redistribute it under the terms of the GNU General Public License
+version 3 or later; see the file named COPYING for details.)",
+                   PACKAGE_STRING);
+      exit(0);
+    case OPT_HELP:
+      usage(0);
       break;
     default:
       usage(2);

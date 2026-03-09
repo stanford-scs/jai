@@ -21,11 +21,9 @@ If building from a release tarball, autotools are not required:
 To install (must be root for setuid):
 
     sudo make install
-    sudo systemd-sysusers
 
 To override the installation prefix:
 
     ./configure --prefix=/usr
     make
     sudo make install
-    sudo systemd-sysusers
