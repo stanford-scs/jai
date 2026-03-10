@@ -27,10 +27,10 @@ template<typename Ent, auto IdFn, auto NamFn> struct DbEnt {
   std::vector<char> buf_;
 
   DbEnt() noexcept = default;
-  DbEnt(DbEnt &&other) : p_(std::exchange(other.p_, nullptr)), ent_(other.ent_)
-  {
-    swap(buf_, other.buf_);
-  }
+  DbEnt(DbEnt &&other)
+    : p_(std::exchange(other.p_, nullptr)), ent_(other.ent_),
+      buf_(exchange(other.buf_, {}))
+  {}
   DbEnt &operator=(DbEnt &&other) noexcept
   {
     p_ = std::exchange(other.p_, nullptr);
@@ -43,17 +43,19 @@ template<typename Ent, auto IdFn, auto NamFn> struct DbEnt {
   const Ent *operator->() const { return p_; }
   Ent *get() const { return p_; }
 
-  bool id(ugid_t n) { return get(IdFn, n); }
-  bool nam(const char *n) { return get(NamFn, n); }
+  static DbEnt get_id(ugid_t n) { return get(IdFn, n); }
+  static DbEnt get_nam(const char *n) { return get(NamFn, n); }
 
-  bool get(auto fn, auto key)
+  static DbEnt get(auto fn, auto key)
   {
-    buf_.resize(std::max(128uz, buf_.capacity()));
+    DbEnt ret;
+    ret.buf_.resize(std::max(128uz, ret.buf_.capacity()));
     for (;;) {
-      if (int r = fn(key, &ent_, buf_.data(), buf_.size(), &p_); !r)
-        return p_;
+      int r = fn(key, &ret.ent_, ret.buf_.data(), ret.buf_.size(), &ret.p_);
+      if (!r)
+        return ret ? std::move(ret) : DbEnt{};
       else if (r == ERANGE)
-        buf_.resize(2 * buf_.size());
+        ret.buf_.resize(2 * ret.buf_.size());
       else
         errno = r, syserr("DbEnt<{}>::get", typeid(Ent).name());
     }
@@ -70,6 +72,7 @@ struct Credentials {
   void make_effective() const;
   void make_real() const;
   std::string show() const;
+  explicit operator bool() const noexcept { return uid_ != -1; }
 
   static Credentials get_user(const struct passwd *pw);
   static Credentials get_user(const PwEnt &e) { return get_user(e.get()); }

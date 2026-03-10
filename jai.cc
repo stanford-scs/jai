@@ -1,6 +1,5 @@
-#include "config.h"
-
 #include "jai.h"
+#include "config.h"
 #include "cred.h"
 #include "fs.h"
 
@@ -39,6 +38,9 @@ constexpr const char *kSB = "sandboxed-home";
   } while (0)
 
 struct Config {
+  enum Mode { kCasual, kSecure };
+
+  Mode mode_{kCasual};
   std::string user_;
   path homepath_;
   path fake_home_;
@@ -115,17 +117,17 @@ Config::init()
 
   PwEnt pw;
   if (realuid == 0 && envuser) {
-    if (!pw.nam(envuser))
+    if (!(pw = PwEnt::get_nam(envuser)))
       err("cannot find password entry for user {}", envuser);
   }
-  else if (!pw.id(realuid))
+  else if (!(pw = PwEnt::get_id(realuid)))
     err("cannot find password entry for uid {}", realuid);
 
   user_ = pw->pw_name;
   homepath_ = pw->pw_dir;
   untrusted_cred_ = user_cred_ = Credentials::get_user(pw);
 
-  if (PwEnt u; u.nam(kUnstrustedUser)) {
+  if (PwEnt u = PwEnt::get_nam(kUnstrustedUser)) {
     if (u->pw_uid && !strcmp(u->pw_gecos, "JAI sandbox untrusted user") &&
         !strcmp(u->pw_dir, "/"))
       untrusted_cred_ = Credentials::get_user(u);
