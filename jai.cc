@@ -45,13 +45,14 @@ struct Config {
   path sandbox_name_ = "default";
   Credentials user_cred_;
   Credentials untrusted_cred_;
+  mode_t old_umask_ = 0755;
 
   Fd home_fd_;
   Fd home_jai_fd_;
   Fd run_jai_fd_;
   Fd run_jai_user_fd_;
 
-  void init();
+  void init_credentials();
   Fd make_idmap_ns();
   Fd make_mnt_ns(const std::vector<path> &);
   void exec(int nsfd, const path &cwd, char **argv);
@@ -103,7 +104,7 @@ lock_or_validate_file(int dfd, const path &file, int flags, auto &&validate,
 }
 
 void
-Config::init()
+Config::init_credentials()
 {
   auto realuid = getuid();
 
@@ -145,6 +146,8 @@ Try running "sudo systemd-sysusers".)",
   // Paranoia about ptrace, because we will drop privileges to access
   // the file system as the user.
   prctl(PR_SET_DUMPABLE, 0);
+
+  old_umask_ = umask(0);
 }
 
 Defer
@@ -323,20 +326,19 @@ Config::make_home_overlay()
 Fd
 Config::make_private_tmp()
 {
-  path name = cat(sandbox_name_, ".tmp");
   auto r = lock_or_validate_file(
-      run_jai_user(), name, O_RDONLY | O_DIRECTORY,
+      run_jai_user(), "tmp", O_RDONLY | O_DIRECTORY,
       [](int fd) { return is_mountpoint(fd); }, ".lock");
   if (r)
-    return std::move(*r);
+    return ensure_dir(**r, sandbox_name_, 01777, kNoFollow);
 
-  Fd tmp = ensure_dir(run_jai_user(), name, 0755, kFollow);
-  if (is_mountpoint(*tmp))
-    return tmp;
-  xmnt_move(*make_tmpfs(cat("jai-", name).c_str(), "gid", "0", "mode", "01777",
-                        "size", "40%"),
-            *tmp);
-  return xopenat(run_jai_user(), name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  Fd tmp = ensure_dir(run_jai_user(), "tmp", 0755, kFollow);
+  if (!is_mountpoint(*tmp)) {
+    xmnt_move(
+        *make_tmpfs("jai-tmp", "gid", "0", "mode", "0755", "size", "40%"),
+        *tmp);
+  }
+  return ensure_dir(run_jai_user(), "tmp" / sandbox_name_, 01777, kNoFollow);
 }
 
 Fd
@@ -387,7 +389,6 @@ Config::make_mnt_ns(const std::vector<path> &dirs)
       .propagation = MS_PRIVATE,
   };
   Fd tmp = clone_tree(*make_private_tmp());
-  xmnt_setattr(*tmp, attr);
 
   Fd home;
   Fd mapns;
@@ -401,6 +402,7 @@ Config::make_mnt_ns(const std::vector<path> &dirs)
     attr.userns_fd = *mapns;
     home = clone_tree(*ensure_udir(home_jai(), cat(sandbox_name_, ".home")));
   }
+  xmnt_setattr(*tmp, attr);
   xmnt_setattr(*home, attr);
 
   if (unshare(CLONE_NEWNS))
@@ -648,6 +650,7 @@ Config::exec(int nsfd, const path &cwd, char **argv)
   if (chdir(cwd.c_str()))
     syserr("chdir({})", cwd.string());
   sanitize_env();
+  umask(old_umask_);
   execvp(argv[0], argv);
   perror(argv[0]);
   _exit(1);
@@ -669,28 +672,33 @@ usage(int status)
 
 enum long_options {
   OPT_VERSION = 256,
-  OPT_HELP = 257,
+  OPT_HELP,
+  OPT_CASUAL,
+  OPT_STRICT,
 };
 static const option long_options[] = {
     {"nocwd", no_argument, nullptr, 'D'},
     {"dir", no_argument, nullptr, 'd'},
     {"version", no_argument, nullptr, OPT_VERSION},
     {"help", no_argument, nullptr, OPT_HELP},
+    {"strict", no_argument, nullptr, OPT_STRICT},
+    {"casual", no_argument, nullptr, OPT_CASUAL},
     {nullptr, 0, nullptr, 0}};
 
 void
 do_main(int argc, char **argv)
 {
   Config conf;
-  conf.init();
+  conf.init_credentials();
   auto restore = conf.asuser();
 
   bool opt_u{}, opt_D{};
   std::vector<path> opt_d;
   path cwd = canonical(std::filesystem::current_path());
+  bool set_mode = false;
 
   int opt;
-  while ((opt = getopt_long(argc, argv, "+d:Duh:H", long_options, nullptr)) !=
+  while ((opt = getopt_long(argc, argv, "+d:Duh:", long_options, nullptr)) !=
          -1)
     switch (opt) {
     case 'd':
@@ -703,7 +711,6 @@ do_main(int argc, char **argv)
       opt_D = true;
       break;
     case 'h':
-      conf.mode_ = Config::kStrict;
       conf.sandbox_name_ = optarg;
       if (conf.sandbox_name_.is_absolute() ||
           std::ranges::distance(conf.sandbox_name_.begin(),
@@ -724,11 +731,23 @@ version 3 or later; see the file named COPYING for details.)",
     case OPT_HELP:
       usage(0);
       break;
+    case OPT_STRICT:
+      set_mode = true;
+      conf.mode_ = Config::kStrict;
+      break;
+    case OPT_CASUAL:
+      set_mode = true;
+      conf.mode_ = Config::kCasual;
+      break;
     default:
       usage(2);
     }
 
   restore.reset();
+
+  if (!set_mode)
+    conf.mode_ =
+        conf.sandbox_name_ == "default" ? Config::kCasual : Config::kStrict;
 
   std::vector<char *> cmd(argv + optind, argv + argc);
   if (opt_u) {
@@ -767,7 +786,6 @@ version 3 or later; see the file named COPYING for details.)",
 int
 main(int argc, char **argv)
 {
-  umask(022);
   if (argc > 0)
     prog = argv[0];
   else
