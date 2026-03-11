@@ -37,7 +37,7 @@ constexpr const char *kRunRoot = "/run/jai";
   } while (0)
 
 struct Config {
-  enum Mode { kCasual, kSecure };
+  enum Mode { kCasual, kStrict };
 
   Mode mode_{kCasual};
   std::string user_;
@@ -554,16 +554,26 @@ auto env_blacklist = std::to_array<const char *>({
     "SENTRY_DSN",
     // Slack
     "SLACK_WEBHOOK_URL",
-});
-
-auto env_suffix_blacklist = std::to_array<const char *>({
-    "_ACCESS_KEY", "_API_KEY",     "_APIKEY",
-    "_AUTH",       "_AUTH_TOKEN",  "_CONNECTION_STRING",
-    "_CREDENTIAL", "_CREDENTIALS", "_PASSWD",
-    "_PASSWORD",   "_PID",         "_PRIVATE_KEY",
-    "_PWD",        "_SECRET",      "_SECRET_KEY",
-    "_SOCK",       "_SOCKET",      "_SOCKET_PATH",
-    "_TOKEN",
+    // Suffixes
+    "*_ACCESS_KEY",
+    "*_API_KEY",
+    "*_APIKEY",
+    "*_AUTH",
+    "*_AUTH_TOKEN",
+    "*_CONNECTION_STRING",
+    "*_CREDENTIAL",
+    "*_CREDENTIALS",
+    "*_PASSWD",
+    "*_PASSWORD",
+    "*_PID",
+    "*_PRIVATE_KEY",
+    "*_PWD",
+    "*_SECRET",
+    "*_SECRET_KEY",
+    "*_SOCK",
+    "*_SOCKET",
+    "*_SOCKET_PATH",
+    "*_TOKEN",
 });
 
 extern "C" char **environ;
@@ -571,16 +581,25 @@ extern "C" char **environ;
 void
 sanitize_env()
 {
-  for (const char *v : env_blacklist)
-    unsetenv(v);
+  std::vector<std::string_view> patterns;
+
+  for (const char *v : env_blacklist) {
+    if (!std::strchr(v, '*'))
+      unsetenv(v);
+    else if (std::count(v, v + std::strlen(v), '*') <= 4)
+      patterns.push_back(v);
+    else
+      // Too many *s could cause a lot of backtracking
+      warn(R"(ignoring env pattern "{}" with too many '*'s)", v);
+  }
 
   std::vector<std::string> to_remove;
   for (char **v = environ; *v; ++v) {
     std::string_view sv(*v);
     if (auto eq = sv.find('='); eq != sv.npos)
       sv = sv.substr(0, eq);
-    for (std::string_view s : env_suffix_blacklist)
-      if (sv.ends_with(s)) {
+    for (auto pat : patterns)
+      if (glob(pat, sv)) {
         to_remove.push_back(std::string{sv});
         break;
       }
@@ -684,7 +703,7 @@ do_main(int argc, char **argv)
       opt_D = true;
       break;
     case 'h':
-      conf.mode_ = Config::kSecure;
+      conf.mode_ = Config::kStrict;
       conf.sandbox_name_ = optarg;
       if (conf.sandbox_name_.is_absolute() ||
           std::ranges::distance(conf.sandbox_name_.begin(),
