@@ -56,6 +56,7 @@ struct Config {
   Fd make_mnt_ns(const std::vector<path> &);
   void exec(int nsfd, const path &cwd, char **argv);
   void unmount();
+  void unmountall();
 
   [[nodiscard]] static Defer asuser(const Credentials *crp);
   [[nodiscard]] Defer asuser() { return asuser(&user_cred_); }
@@ -281,7 +282,7 @@ Config::make_blacklist(int dfd, path name)
                   : *ensure_dir(*blacklistfd, subdir, 0700, kNoFollow),
               p.filename(), O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
     } catch (const std::exception &e) {
-      std::println(stderr, "{}", e.what());
+      warn("{}", e.what());
     }
   }
 
@@ -291,13 +292,12 @@ Config::make_blacklist(int dfd, path name)
 Fd
 Config::make_home_overlay()
 {
+  path sb = cat(sandbox_name_, ".home");
   auto r = lock_or_validate_file(
-      run_jai_user(), "home", O_RDONLY | O_DIRECTORY,
+      run_jai_user(), sb, O_RDONLY | O_DIRECTORY,
       [](int fd) { return is_mountpoint(fd); }, ".lock");
   if (r)
     return std::move(*r);
-
-  path sb = cat(sandbox_name_, ".home");
 
   Fd sandboxed_home = ensure_dir(run_jai_user(), sb, 0755, kFollow, true);
   if (is_mountpoint(*sandboxed_home))
@@ -308,7 +308,7 @@ Config::make_home_overlay()
   Fd work = ensure_udir(home_jai(), cat(sandbox_name_, ".work"));
   restore.reset();
 
-  Fd fsfd = xfsopen("overlay", "jai-home");
+  Fd fsfd = xfsopen("overlay", cat("jai-", sb).c_str());
   if (fsconfig(*fsfd, FSCONFIG_SET_FD, "lowerdir+", nullptr, home()) ||
       fsconfig(*fsfd, FSCONFIG_SET_FD, "upperdir", nullptr, *changes) ||
       fsconfig(*fsfd, FSCONFIG_SET_FD, "workdir", nullptr, *work))
@@ -323,18 +323,20 @@ Config::make_home_overlay()
 Fd
 Config::make_private_tmp()
 {
+  path name = cat(sandbox_name_, ".tmp");
   auto r = lock_or_validate_file(
-      run_jai_user(), "tmp", O_RDONLY | O_DIRECTORY,
+      run_jai_user(), name, O_RDONLY | O_DIRECTORY,
       [](int fd) { return is_mountpoint(fd); }, ".lock");
   if (r)
     return std::move(*r);
 
-  Fd tmp = ensure_dir(run_jai_user(), "tmp", 0755, kFollow);
+  Fd tmp = ensure_dir(run_jai_user(), name, 0755, kFollow);
   if (is_mountpoint(*tmp))
     return tmp;
-  xmnt_move(*make_tmpfs("jai-tmp", "gid", "0", "mode", "01777", "size", "40%"),
+  xmnt_move(*make_tmpfs(cat("jai-", name).c_str(), "gid", "0", "mode", "01777",
+                        "size", "40%"),
             *tmp);
-  return xopenat(run_jai_user(), "tmp", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  return xopenat(run_jai_user(), name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
 }
 
 Fd
@@ -397,7 +399,7 @@ Config::make_mnt_ns(const std::vector<path> &dirs)
     mapns = make_idmap_ns();
     attr.attr_set |= MOUNT_ATTR_IDMAP;
     attr.userns_fd = *mapns;
-    home = clone_tree(*ensure_udir(home_jai(), sandbox_name_));
+    home = clone_tree(*ensure_udir(home_jai(), cat(sandbox_name_, ".home")));
   }
   xmnt_setattr(*home, attr);
 
@@ -452,12 +454,82 @@ Config::unmount()
   Fd lock;
   while (!(lock = open_lockfile(run_jai_user(), ".lock")))
     ;
+
+  auto runuser = path(kRunRoot) / user_;
+  for (const char *ext : {".home", ".tmp"}) {
+    auto mp = runuser / cat(sandbox_name_, ext);
+    umount2(mp.c_str(), UMOUNT_NOFOLLOW);
+    unlinkat(run_jai_user(), mp.filename().c_str(), AT_REMOVEDIR);
+  }
+
+  unlinkat(run_jai_user(), ".lock", 0);
+  lock.reset();
+  unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
+}
+
+static void
+clean_root_owned_dir(int dfd, path file)
+{
+  Fd target = openat(dfd, file.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  if (!target) {
+    warn("{}: {}", fdpath(dfd, file), strerror(errno));
+    return;
+  }
+  if (!is_fd_at_path(dfd, *target, "..", kNoFollow)) {
+    warn("{}: ignored (possible TOCTTOU problem)", fdpath(dfd, file));
+    return;
+  }
+  auto d = xopendir(*target);
+  while (auto de = readdir(d)) {
+    struct stat sb;
+    if (fstatat(*target, d_name(de), &sb, AT_SYMLINK_NOFOLLOW)) {
+      warn("fstatat {}: {}", fdpath(*target, d_name(de)), strerror(errno));
+      continue;
+    }
+    else if (!S_ISDIR(sb.st_mode) &&
+             (sb.st_size == 0 || !S_ISREG(sb.st_mode))) {
+      if (unlinkat(*target, d_name(de), 0))
+        warn("unlinkat {}: {}", fdpath(*target, d_name(de)), strerror(errno));
+      else
+        warn("deleted {}", fdpath(*target, d_name(de)));
+    }
+  }
+}
+
+void
+Config::unmountall()
+{
+  Fd lock;
+  while (!(lock = open_lockfile(run_jai_user(), ".lock")))
+    ;
   recursive_umount(path(kRunRoot) / user_, false);
 
-  // XXX
+  auto dir = xopendir(run_jai_user());
+  while (auto de = readdir(dir))
+    unlinkat(run_jai_user(), de->d_name, AT_REMOVEDIR);
 
-  unlinkat(run_jai_user(), "tmp", AT_REMOVEDIR);
-  //unlinkat(run_jai_user(), kSB, AT_REMOVEDIR);
+  // Get rid of any stale files the user can't delete
+  try {
+    auto restore = asuser();
+    auto jd = xopendir(home_jai());
+    while (auto de = readdir(jd)) {
+      path name = d_name(de);
+      if (name.extension() == ".work")
+        try {
+          Fd work = xopenat(home_jai(), name.c_str(), O_RDONLY | O_DIRECTORY);
+          check_user(*work);
+          restore.reset();
+          Defer _unrestore([&restore, this] { restore = asuser(); });
+          clean_root_owned_dir(*work, "work");
+          clean_root_owned_dir(*work, "index");
+        } catch (const std::exception &e) {
+          warn("{}", e.what());
+        }
+    }
+  } catch (const std::exception &e) {
+    warn("{}", e.what());
+  }
+
   unlinkat(run_jai_user(), ".lock", 0);
   lock.reset();
   unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
@@ -520,7 +592,6 @@ sanitize_env()
 void
 Config::exec(int nsfd, const path &cwd, char **argv)
 {
-  xsetns(nsfd, CLONE_NEWNS);
   if (unshare(CLONE_NEWPID | CLONE_NEWIPC))
     syserr("unshare(CLONE_NEWPID)");
 
@@ -529,6 +600,7 @@ Config::exec(int nsfd, const path &cwd, char **argv)
     int status;
     while (waitpid(pid, &status, 0) == -1 && errno == EINTR)
       ;
+    // unmount();
     if (WIFEXITED(status))
       exit(WEXITSTATUS(status));
     if (WIFSIGNALED(status)) {
@@ -539,14 +611,14 @@ Config::exec(int nsfd, const path &cwd, char **argv)
   }
 
   try {
+    xsetns(nsfd, CLONE_NEWNS);
     recursive_umount("/proc");
     xmnt_move(*make_mount(*xfsopen("proc", "proc"), MOUNT_ATTR_NOSUID |
                                                         MOUNT_ATTR_NODEV |
                                                         MOUNT_ATTR_NOEXEC),
               -1, "/proc");
   } catch (const std::exception &e) {
-    std::println(stderr, "{}: {}", prog.filename().string(), e.what());
-    fflush(stderr);
+    warn("{}", e.what());
     _exit(1);
   }
 
@@ -643,7 +715,7 @@ version 3 or later; see the file named COPYING for details.)",
   if (opt_u) {
     if (opt_D || !opt_d.empty() || !cmd.empty())
       usage(2);
-    conf.unmount();
+    conf.unmountall();
     return;
   }
   if (!opt_D && !std::ranges::contains(opt_d, cwd)) {
@@ -688,7 +760,7 @@ main(int argc, char **argv)
   try {
     do_main(argc, argv);
   } catch (const std::exception &e) {
-    std::println(stderr, "{}: {}", prog.string(), e.what());
+    warn("{}", e.what());
     return 1;
   }
   return 0;

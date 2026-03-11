@@ -202,18 +202,28 @@ xdup(int fd)
 }
 
 inline RaiiHelper<closedir>
-xopendir(int dfd, path file = {})
+xopendir(int dfd, path file = {}, FollowLinks follow = kNoFollow)
 {
   Fd fd;
   if (file.empty())
     fd = xdup(dfd);
   else
-    fd = xopenat(dfd, file, O_RDONLY | O_DIRECTORY);
+    fd = xopenat(dfd, file,
+                 O_RDONLY | O_DIRECTORY |
+                     (follow == kNoFollow ? O_NOFOLLOW : 0));
   if (auto d = fdopendir(*fd)) {
     fd.release();
     return d;
   }
   syserr("fdopendir({})", fdpath(dfd, file));
+}
+
+// dirent::d_name is an array, so won't convert properly to types that
+// treat a char array differently from a const char *.
+inline const char *
+d_name(const struct dirent *de)
+{
+  return de->d_name;
 }
 
 inline std::array<Fd, 2>

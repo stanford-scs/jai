@@ -27,15 +27,17 @@ template<typename Ent, auto IdFn, auto NamFn> struct DbEnt {
   std::vector<char> buf_;
 
   DbEnt() noexcept = default;
-  DbEnt(DbEnt &&other)
-    : p_(std::exchange(other.p_, nullptr)), ent_(other.ent_),
-      buf_(exchange(other.buf_, {}))
-  {}
+  DbEnt(DbEnt &&other) : ent_(other.ent_), buf_(exchange(other.buf_, {}))
+  {
+    p_ = other.p_ ? &ent_ : nullptr;
+    other.p_ = nullptr;
+  }
   DbEnt &operator=(DbEnt &&other) noexcept
   {
-    p_ = std::exchange(other.p_, nullptr);
+    p_ = other.p_ ? &ent_ : nullptr;
+    other.p_ = nullptr;
     ent_ = other.ent_;
-    swap(buf_, other.buf_);
+    buf_ = std::exchange(other.buf_, {});
     return *this;
   }
 
