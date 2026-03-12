@@ -2,7 +2,7 @@ bin_PROGRAMS = jai
 
 AM_CXXFLAGS = $(MOUNT_CFLAGS) $(LIBACL_CFLAGS)
 
-jai_SOURCES = cred.cc fs.cc jai.cc cred.h defer.h err.h fs.h jai.h
+jai_SOURCES = cred.cc fs.cc jai.cc cred.h argtype.h defer.h err.h fs.h jai.h
 jai_LDADD = $(MOUNT_LIBS) $(LIBACL_LIBS)
 
 man1_MANS = jai.1

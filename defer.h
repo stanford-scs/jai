@@ -2,13 +2,11 @@
 
 #pragma once
 
+#include "argtype.h"
+
 #include <concepts>
 #include <functional>
 #include <utility>
-
-template<auto F>
-using ArgType =
-    decltype([]<typename R, typename A>(R (*)(A)) -> A { throw; }(F));
 
 template<typename T, typename... Ts>
 concept is_one_of = (std::same_as<T, Ts> || ...);
@@ -16,7 +14,10 @@ concept is_one_of = (std::same_as<T, Ts> || ...);
 // Note that Destroy generally should not throw, whether or not it is
 // declared noexcept.  Only an explicit call to reset() will allow
 // exceptions to propagate.
-template<auto Destroy, typename T = ArgType<Destroy>, auto Empty = T{}>
+//
+// auto(Destroy) avoids warnings about ignored attributes on closedir.
+template<auto Destroy, typename T = UnaryType<decltype(auto(Destroy))>,
+         auto Empty = T{}>
 struct RaiiHelper {
   T t_ = Empty;
 
