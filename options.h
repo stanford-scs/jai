@@ -215,10 +215,15 @@ public:
       }
     }
     if (!helpstr.empty()) {
-      if (auto sz = optstr.size(); sz < 13)
-        help_ += std::format("  {}  {}\n", optstr, helpstr);
+      constexpr size_t kIndent = 16;
+      for (size_t i = 0; (i = helpstr.find('\n', i)) != helpstr.npos;
+           i += kIndent)
+        helpstr.insert(++i, std::string(kIndent, ' '));
+      if (auto sz = optstr.size(); sz < kIndent - 3)
+        help_ += std::format("  {:<{}}{}\n", optstr, kIndent - 2, helpstr);
       else
-        help_ += std::format("  {}\n        {}\n", optstr, helpstr);
+        help_ += std::format("  {}\n{}{}\n", optstr, std::string(kIndent, ' '),
+                             helpstr);
     }
     return *this;
   }

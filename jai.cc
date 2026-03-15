@@ -2,6 +2,7 @@
 #include "config.h"
 #include "cred.h"
 #include "fs.h"
+#include "options.h"
 
 #include <cassert>
 #include <cstring>
@@ -11,7 +12,6 @@
 #include <acl/libacl.h>
 #include <dirent.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <linux/futex.h>
 #include <sched.h>
 #include <sys/file.h>
@@ -334,9 +334,8 @@ Config::make_private_tmp()
 
   Fd tmp = ensure_dir(run_jai_user(), "tmp", 0755, kFollow);
   if (!is_mountpoint(*tmp)) {
-    xmnt_move(
-        *make_tmpfs("jai-tmp", "gid", "0", "mode", "0755", "size", "40%"),
-        *tmp);
+    xmnt_move(*make_tmpfs("jai-tmp", "gid", "0", "mode", "0755", "size", "40%"),
+              *tmp);
   }
   return ensure_dir(run_jai_user(), "tmp" / sandbox_name_, 01777, kNoFollow);
 }
@@ -656,34 +655,16 @@ Config::exec(int nsfd, const path &cwd, char **argv)
   _exit(1);
 }
 
+std::string option_help;
+
 [[noreturn]] static void
 usage(int status)
 {
-  std::println(status ? stderr : stdout,
-               R"(usage: {0} [-u | [-D] [-h NAME] [-d DIR ...] CMD [ARG...]]
-   no arguments  create sandboxed-home under {1}
-   -u            unmount sandboxed-home
-   -h NAME       use $HOME/.jai/NAME as home directory
-   -d DIR        provide unrestricted access to DIR in addition to $PWD
-   -D            don't provide unrestricted access to $PWD)",
-               prog.filename().string(), kRunRoot);
+  std::print(status ? stderr : stdout,
+             "usage: {0} [OPTIONS] [CMD [ARG...]]\n{1}",
+             prog.filename().string(), option_help);
   exit(status);
 }
-
-enum long_options {
-  OPT_VERSION = 256,
-  OPT_HELP,
-  OPT_CASUAL,
-  OPT_STRICT,
-};
-static const option long_options[] = {
-    {"nocwd", no_argument, nullptr, 'D'},
-    {"dir", no_argument, nullptr, 'd'},
-    {"version", no_argument, nullptr, OPT_VERSION},
-    {"help", no_argument, nullptr, OPT_HELP},
-    {"strict", no_argument, nullptr, OPT_STRICT},
-    {"casual", no_argument, nullptr, OPT_CASUAL},
-    {nullptr, 0, nullptr, 0}};
 
 void
 do_main(int argc, char **argv)
@@ -697,51 +678,51 @@ do_main(int argc, char **argv)
   path cwd = canonical(std::filesystem::current_path());
   bool set_mode = false;
 
-  int opt;
-  while ((opt = getopt_long(argc, argv, "+d:Duh:", long_options, nullptr)) !=
-         -1)
-    switch (opt) {
-    case 'd':
-      opt_d.emplace_back(canonical(path(optarg)));
-      break;
-    case 'u':
-      opt_u = true;
-      break;
-    case 'D':
-      opt_D = true;
-      break;
-    case 'h':
-      conf.sandbox_name_ = optarg;
-      if (conf.sandbox_name_.is_absolute() ||
-          std::ranges::distance(conf.sandbox_name_.begin(),
-                                conf.sandbox_name_.end()) != 1 ||
-          conf.sandbox_name_.c_str()[0] == '.') {
-        std::println(stderr, "{}: invalid home directory name", optarg);
-        usage(2);
-      }
-      break;
-    case OPT_VERSION:
-      std::println(R"({}
+  Options opts;
+  opts(
+      "-d", "--dir", [&](path d) { opt_d.emplace_back(canonical(d)); },
+      "Enable full access to DIR", "DIR");
+  opts(
+      "-D", "--nocwd", [&] { opt_D = true; },
+      "Do not grant access to current working directory");
+  opts("-u", [&] { opt_u = true; }, "Unmount sandboxed file systems");
+  opts(
+      "-n", "--name",
+      [&] (std::string optarg) {
+        conf.sandbox_name_ = optarg;
+        if (conf.sandbox_name_.is_absolute() ||
+            std::ranges::distance(conf.sandbox_name_.begin(),
+                                  conf.sandbox_name_.end()) != 1 ||
+            conf.sandbox_name_.c_str()[0] == '.') {
+          std::println(stderr, "{}: invalid sandbox name", optarg);
+          usage(2);
+        }
+      },
+      "Use private or overlay home directory NAME", "NAME");
+  opts(
+      "--strict",
+      [&] {
+        set_mode = true;
+        conf.mode_ = Config::kStrict;
+      },
+      "Enable strict mode");
+  opts(
+      "--casual",
+      [&] {
+        set_mode = true;
+        conf.mode_ = Config::kCasual;
+      },
+      "Enable casual mode");
+  opts("--version", [] {
+    std::println(R"({}
 Copyright (C) 2026 David Mazieres
 This program comes with NO WARRANTY, to the extent permitted by law.
 You may redistribute it under the terms of the GNU General Public License
 version 3 or later; see the file named COPYING for details.)",
-                   PACKAGE_STRING);
-      exit(0);
-    case OPT_HELP:
-      usage(0);
-      break;
-    case OPT_STRICT:
-      set_mode = true;
-      conf.mode_ = Config::kStrict;
-      break;
-    case OPT_CASUAL:
-      set_mode = true;
-      conf.mode_ = Config::kCasual;
-      break;
-    default:
-      usage(2);
-    }
+                 PACKAGE_STRING);
+    exit(0);
+  });
+  option_help = opts.help();
 
   restore.reset();
 
@@ -749,7 +730,14 @@ version 3 or later; see the file named COPYING for details.)",
     conf.mode_ =
         conf.sandbox_name_ == "default" ? Config::kCasual : Config::kStrict;
 
-  std::vector<char *> cmd(argv + optind, argv + argc);
+  std::vector<char *> cmd;
+  try {
+    cmd.append_range(opts.parse_argv(argc, argv));
+  } catch (Options::Error &e) {
+    std::println("{}", e.what());
+    usage(2);
+  }
+
   if (opt_u) {
     if (opt_D || !opt_d.empty() || !cmd.empty())
       usage(2);
@@ -769,7 +757,7 @@ version 3 or later; see the file named COPYING for details.)",
           R"({0}: Refusing to expose your entire home directory to sandbox.  Did
 {1:>{2}}  you forget to specify the -D option?  If you really want to grant
 {1:>{2}}  permissions on your entire home directory, run
-{1:>{2}}    jai -Dd {3} {4})",
+{1:>{2}}    {0} -Dd {3} {4})",
           name, "", name.size(), conf.homepath_.string(), cmdstr);
       exit(1);
     }
@@ -789,7 +777,7 @@ main(int argc, char **argv)
   if (argc > 0)
     prog = argv[0];
   else
-    prog = "jai";
+    prog = PACKAGE_TARNAME;
 
   do_main(argc, argv);
   return 0;
