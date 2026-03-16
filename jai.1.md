@@ -9,7 +9,7 @@ jai - Jail an AI agent
 # SYNOPSIS
 
 `jai` [*option*]...  *cmd* [*arg*]... \
-`jai` [`--casual`] [*option*]... \
+`jai` [*option*]... \
 `jai` `-u`
 
 # DESCRIPTION
@@ -22,33 +22,76 @@ thinking of giving an agent full control of your account and all its
 files.  Compared to the latter, `jai` can reduce the blast radius
 should things go wrong.
 
-Before using `jai`, if your home directory is on NFS and you want to
-use casual mode, make `$HOME/.jai` a symbolic link to a directory you
-own on a local file system that supports extended attributes.
-Otherwise, you may only be able to use strict mode.
+By default, if you run "`jai` *cmd* [*arg*]...", it will execute *cmd*
+with the specified arguments in a lightweight sandbox that has full
+access to the current working directory and everything below,
+copy-on-write access to an overlay mount of your home directory,
+private `/tmp` and `/var/tmp` directories, and read-only access to
+everything else.  This is known as _casual mode_, because *cmd* can
+read most sensitive files on the system, so jai prevents *cmd* from
+clobbering all your files but doesn't provide any confidentiality.
 
-To get started, run `jai` with no arguments.  (If it is not setuid
-root, you will need to run `sudo jai`.)  This will create an overlay
-mount of your home directory in `/run/jai/$USER/default.home`.  Change
-to that directory and delete any sensitive files you don't want your
-agent to have access to.  (Start with deleting a file you don't care
-about, and verify that it only disappears from the sandbox, not from
-your real home directory.)
+If you run `jai --strict` *cmd* [*arg*]...", then *cmd* will be run
+with an empty home directory as an unprivileged user id, but with the
+current working directory mapped to its place and fully exposed.
+While the rest of the system outside the user's home directory is
+available read-only, because *cmd* is running with a different user
+ID, it will not be able to read sensitive files accessible to the
+user.
 
-Once you are satisfied with the sandbox, go to a project directory you
-own and run `jai $SHELL`.  That will let you explore the sandboxed
-environment.  You have complete access to the directory in which you
-ran `jai`, but the rest of your home directory is sandboxed (changes
-will not affect your real home directory), and the rest of the file
-system outside your home directory is read-only.  If that works, exit
-your shell and run `jai` _code-assistant_ for your favorite code
-assistant.
+Before using `jai`, if your home directory is on NFS, make
+`$HOME/.jai` a symbolic link to a directory you own on a local file
+system that supports extended attributes.  Otherwise, overlay mounts
+may not work and you may only be able to use strict mode (see below).
+
+If you want to grant access to directories other than the current
+working directory, you can specify addition directories with the `-d`
+option, as in `jai -d /local/build untrusted_program`.  If you don't
+want to grant access to the current working directory, use the `-D`
+option.
 
 If you forget to export some directory that you wanted the sandboxed
-tool to update, you will find changed files in `$HOME/.jai/changes`.
-You can destroy the sandbox with `jai -u`, move the changed files back
-into your home directory, and re-run `jai` with the appropriate `-d`
-flag.
+tool to update, you will find changed files in
+`$HOME/.jai/default.changes`.  You can destroy the sandbox with `jai
+-u`, move the changed files back into your home directory, and re-run
+`jai` with the appropriate `-d` flag.
+
+jai allows the use of multiple sandboxed home directories.  To use a
+home directory other than the default, just give it a name with the
+`-n` option and it will be created on demand.  When you specify a home
+directory with `-n`, strict mode becomes the default.  However, you
+can have multiple home overlays by specifying `--casual` with `-n`.
+
+# CONFIGURATION
+
+If *cmd* does not contain any slashes, configuration is taken from
+`$HOME/.jai/`*cmd*`.conf`, or if no such file exists, from
+`$HOME/.jai/default.conf`.  The format of the configuration file is a
+series of lines of the form "*option* [*value*]".  *option* can be any
+long command-line option without the leading `--`, for example:
+
+    conf default.conf
+    casual
+    dir /local/build
+    mask Mail
+
+Within a configuration file, the `conf` directive acts like an include
+directive, and includes another configuration file at the exact point
+of the `conf` directive.
+
+jai executes programs with bash.  The `command` directive allows you
+to reconfigure the environment or add command-line options to certain
+commands.  For instance, you might create a file `python.conf` with
+the following:
+
+    conf default.conf
+    strict
+    dir /home/user/venv
+    name python
+    command source /home/user/venv/bin/activate; "$0" "$@"
+
+Then when running `jai python`, this configuration file will load a
+virtual environment before running the command.
 
 # EXAMPLES
 
@@ -163,25 +206,32 @@ flag.
 
 # FILES
 
-`$HOME/.jai`
-: `jai` uses this to construct an overlay mount so that sandboxed code
-  can believe it is writing to your home directory without actually
-  doing so.  This directory requires extended attributes, so **must
-  not be on NFS**.  Make it a symbolic link to a local directory owned
-  by you if your home directory is on NFS.
+`$HOME/.jai/default.conf`, `$HOME/.jai/`*cmd*`.conf`
+: Configuration file if none is specified with `-C`.  If there is a
+  file for *cmd*, then *cmd*`.conf` is used.  Otherwise `default.conf`
+  is used.
 
-`$HOME/.jai/changes`
+`$HOME/.jai/default.changes`, `$HOME/.jai/`*name*`.changes`
 : This "upper" directory is overlaid on your home directory and
   contains changes that have been made inside a jail.  If you make
   changes in this directory, you may need to tear down and recreate
-  the sandboxed home directory with `jai -u`.
+  the sandboxed home directory with `jai -u`.  The non-default version
+  is used when you specify `-n` *name* on the command line.
 
-`/run/jai/$USER/sandboxed-home`
-: Sandboxed home directory for jails.  You should delete any files
-  with sensitive data in this directory so they will not be available
-  in the jail.
+`$HOME/.jai/default.work`, `$HOME/.jai/`*name*`.work`
+: This "work" directory is required by overlayfs, but does not contain
+  anything user-accessible.  Every once in a while the overlay file
+  system may create files in here that you cannot delete.  If you are
+  trying to blow away an overlay directory to start from scratch and
+  cannot delete this directory, try running `jay -u` which will clean
+  things up.
 
-`/run/jai/$USER/tmp`
+`/run/jai/$USER/default.home`, `/run/jai/$USER/`*name*`.home`
+: Sandboxed home directories for jails.  You can delete files with
+  sensitive data in these sandboxed directories to hide theme from
+  jailed processes, or see the `--mask` option.
+
+`/run/jai/$USER/tmp/default`, `/run/jai/$USER/tmp/`*name*
 : Private `/tmp` and `/var/tmp` directory made available in the jail.
 
 # BUGS
@@ -190,25 +240,15 @@ Overlayfs needs an empty directory `$HOME/.jai/work`, into which it
 places two root-owned directories `index` and `work`.  Usually these
 directories are empty when the file system is unmounted.  However,
 occasionally they contain files, in which case it requires root
-privileges to delete the directories.  (A user can still move
-`$HOME/.jai/work` out of the way if `jai` won't restart, but it's
-annoying not to be able to clean up completely without root.)
+privileges to delete the directories.  You can run `jai -u` to clean
+these up if you are unable to delete them.
 
-In general overlayfs can be flaky.  If the attributes on the `changes`
-directory get out of sync, it may require making a new `changes`
-directory to get around mounting errors.
+In general overlayfs can be flaky.  If the attributes on the
+`default.changes` directory get out of sync, it may require making a
+new `default.changes` directory to get around mounting errors.
 
-The initial file blacklist is hard-coded, but should support a
-configuration file.
+There is no way to reverse an `unsetenv` or `mask` configuration
+option.
 
-`jai` removes a few hard-coded environment variables and suffixes,
-such as anything ending `_PID`, `_SOCK`, or `_TOKEN`, or `_PASSWORD`,
-but otherwise requires a wrapper to clean the environment if you are
-in the habit of storing secrets there.  If you actually want to pass
-these environment variables through, you will have to launder them
-through some other variable name.  There should be a configuration
-file.
-
-There is only one sandboxed home directory per user, so if you run
-multiple sandboxed agents, they will have access to each other's
-credentials unless you pass through the directory with `-d`.
+If you run `jai -u` while any casual jails are still in use, you will
+not be able to recreate the overlay until the old processes exit.
