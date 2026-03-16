@@ -133,6 +133,8 @@ bool is_dir_empty(int dirfd);
 Fd ensure_dir(int dfd, const path &p, mode_t perm, FollowLinks follow,
               bool okay_if_other_owner = false);
 
+void make_whiteout(int dfd, const path &p);
+
 bool is_mountpoint(int dfd, const path &file = {},
                    FollowLinks follow = kNoFollow);
 

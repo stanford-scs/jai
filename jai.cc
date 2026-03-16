@@ -28,6 +28,8 @@ struct Config {
   std::set<std::string> env_filter_;
   path cwd_;
   std::string shellcmd_;
+  PathSet mask_files_;
+  bool mask_warn_{false};
 
   std::string user_;
   path homepath_;
@@ -89,6 +91,14 @@ struct Config {
   {
     return p.is_relative() && std::ranges::distance(p.begin(), p.end()) == 1 &&
            *p.c_str() != '.';
+  }
+  void mask_warn()
+  {
+    if (mask_warn_) {
+      warn("--mask did nothing because ~/.jai/{}.changes already existed",
+           sandbox_name_.string());
+      mask_warn_ = false;
+    }
   }
 };
 
@@ -278,44 +288,19 @@ Config::home()
   return *home_fd_;
 }
 
-const auto default_blacklist = std::to_array<const char *>({
-    ".jai",
-    ".ssh",
-    ".gnupg",
-    ".local/share/keyrings",
-    ".netrc",
-    ".git-credentials",
-    ".aws",
-    ".azure",
-    ".config/gcloud",
-    ".config/gh",
-    ".config/Keybase",
-    ".config/kube",
-    ".docker",
-    ".password-store",
-    ".mozilla",
-    ".config/chromium",
-    ".config/google-chrome",
-    ".config/BraveSoftware",
-    ".bash_history",
-    ".zsh_history",
-});
-
 Fd
 Config::make_blacklist(int dfd, path name)
 {
   Fd blacklistfd = ensure_dir(dfd, name.c_str(), 0700, kFollow);
   check_user(*blacklistfd);
-  if (!is_dir_empty(*blacklistfd))
+  if (!is_dir_empty(*blacklistfd)) {
+    mask_warn();
     return blacklistfd;
+  }
 
-  for (path p : default_blacklist) {
+  for (path p : mask_files_) {
     try {
-      auto subdir = p.relative_path().parent_path();
-      xopenat(subdir.empty()
-                  ? *blacklistfd
-                  : *ensure_dir(*blacklistfd, subdir, 0700, kNoFollow),
-              p.filename(), O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
+      make_whiteout(*blacklistfd, p);
     } catch (const std::exception &e) {
       warn("{}", e.what());
     }
@@ -331,8 +316,10 @@ Config::make_home_overlay()
   auto r = lock_or_validate_file(
       run_jai_user(), sb, O_RDONLY | O_DIRECTORY,
       [](int fd) { return is_mountpoint(fd); }, ".lock");
-  if (r)
+  if (r) {
+    mask_warn();
     return std::move(*r);
+  }
 
   Fd sandboxed_home = ensure_dir(run_jai_user(), sb, 0755, kFollow, true);
   if (is_mountpoint(*sandboxed_home))
@@ -630,17 +617,60 @@ auto env_blacklist = std::to_array<const char *>({
     "*_TOKEN",
 });
 
+const auto default_masklist = std::to_array<const char *>({
+    ".jai",
+    ".ssh",
+    ".gnupg",
+    ".local/share/keyrings",
+    ".netrc",
+    ".git-credentials",
+    ".aws",
+    ".azure",
+    ".config/gcloud",
+    ".config/gh",
+    ".config/Keybase",
+    ".config/kube",
+    ".docker",
+    ".password-store",
+    ".mozilla",
+    ".config/chromium",
+    ".config/google-chrome",
+    ".config/BraveSoftware",
+    ".bash_history",
+    ".zsh_history",
+});
+
 void
 Config::make_default_conf()
 {
   auto fd = xopenat(home_jai(), ".", O_RDWR | O_TMPFILE | O_CLOEXEC, 0600);
-  std::string text;
+  std::string text =
+      R"(# The executed process will have PID 1, which can confuse some
+# programs.  Adding "; exit $?" after the command and arguments will
+# cause bash to fork and stay around, so command "$0" has PID 2.
+
+command "$0" "$@"; exit $?
+
+# Masked file wills be deleted when a new overlayfs is first created,
+# but have no effect on existing overlays.  To delete files from an
+# existing overlay, delete them under /run/jai/$USER/default.home.  If
+# you want to start over with a fresh overlay, you can run "jai -u" to
+# unmount any existing overlays, then remove the directory
+# $HOME/.jai/$USER/default.changes.  The next time you run jai, it
+# will create a new overlay masking all of the files below.
+
+)";
+  for (auto p : default_masklist)
+    text += std::format("mask {}\n", p);
+
+  text += R"(
+# The following environment variables will be removed from sandboxed
+# environments.  You can use * as a wildcard to match any variables
+# matching the pattern.
+
+)";
   for (auto e : env_blacklist)
     text += std::format("unsetenv {}\n", e);
-  // The executed process will have PID 1, which can confuse some programs,
-  // so add "; exit $?" to force bash to stay around and be PID 1.
-  text += R"(command "$0" "$@"; exit $?)"
-          "\n";
 
   errno = EAGAIN;
   if (write(*fd, text.data(), text.size()) != text.size())
@@ -760,6 +790,14 @@ Config::opt_parser()
         sandbox_name_ = sb;
       },
       "Use private or overlay home directory NAME", "NAME");
+  opts(
+      "--mask",
+      [this](path p) {
+        if (p.is_absolute())
+          err<Options::Error>("{}: cannot mask an absolute path", p.string());
+        mask_files_.emplace(std::move(p));
+      },
+      "Erase $HOME/FILE when first creating overlay home", "FILE");
   opts("--conf", [this, opts = ret.get()](path file) {
     if (!parse_config_file(file, opts))
       err<Options::Error>("{}: configuration file not found", file.string());
@@ -836,6 +874,8 @@ default: CMD.conf or default.conf if CMD.conf does not exist)",
     std::println("{}", e.what());
     usage(2);
   }
+  if (!conf.mask_files_.empty())
+    conf.mask_warn_ = true;
 
   if (opt_u) {
     if (!conf.grant_cwd_ || !conf.grant_directories_.empty() || !cmd.empty()) {

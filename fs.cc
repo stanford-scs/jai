@@ -226,6 +226,33 @@ ensure_dir(int dfd, const path &p, mode_t perm, FollowLinks follow,
   return fd;
 }
 
+void
+make_whiteout(int dfd, const path &inp)
+{
+  auto p = inp.lexically_normal();
+  if (!p.has_filename())
+    p = p.parent_path();
+  if (p.is_absolute() || p.empty() || *p.begin() == "..")
+    err<std::logic_error>(R"(make_whiteout: "{}" is not a relative path)",
+                          inp.string());
+
+  Fd dirholder;
+  if (p.has_parent_path()) {
+    dirholder = ensure_dir(dfd, p.parent_path(), 0700, kNoFollow, false);
+    dfd = *dirholder;
+    p = p.filename();
+  }
+
+  auto olduid = geteuid();
+  seteuid(0);
+  int err = 0;
+  if (mknodat(dfd, p.filename().c_str(), S_IFCHR, 0))
+    err = errno;
+  seteuid(olduid);
+  if ((errno = err))
+    syserr("mknod {}/.jai c 0 0", fdpath(dfd, p));
+}
+
 bool
 is_mountpoint(int dfd, const path &file, FollowLinks follow)
 {
