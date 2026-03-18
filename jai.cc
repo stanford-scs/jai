@@ -803,34 +803,34 @@ Config::exec(int nsfd, char **argv)
                                                         MOUNT_ATTR_NODEV |
                                                         MOUNT_ATTR_NOEXEC),
               -1, "/proc");
+
+    if (mode_ == kCasual || mode_ == kBare)
+      user_cred_.make_real();
+    else
+      untrusted_cred_.make_real();
+    if (chdir(cwd().c_str()))
+      syserr("chdir({})", cwd().string());
+    sanitize_env();
+    umask(old_umask_);
+    const char *argv0 = argv[0];
+    std::vector<const char *> bashcmd;
+    if (!shellcmd_.empty()) {
+      argv0 = PATH_BASH;
+      bashcmd.push_back("init");
+      bashcmd.push_back("-c");
+      bashcmd.push_back(shellcmd_.c_str());
+      while (*argv)
+        bashcmd.push_back(*(argv++));
+      bashcmd.push_back(nullptr);
+      argv = const_cast<char **>(bashcmd.data());
+    }
+    execvp(argv0, argv);
+    perror(argv0);
+    _exit(1);
   } catch (const std::exception &e) {
     warn("{}", e.what());
     _exit(1);
   }
-
-  if (mode_ == kCasual || mode_ == kBare)
-    user_cred_.make_real();
-  else
-    untrusted_cred_.make_real();
-  if (chdir(cwd().c_str()))
-    syserr("chdir({})", cwd().string());
-  sanitize_env();
-  umask(old_umask_);
-  const char *argv0 = argv[0];
-  std::vector<const char *> bashcmd;
-  if (!shellcmd_.empty()) {
-    argv0 = PATH_BASH;
-    bashcmd.push_back("init");
-    bashcmd.push_back("-c");
-    bashcmd.push_back(shellcmd_.c_str());
-    while (*argv)
-      bashcmd.push_back(*(argv++));
-    bashcmd.push_back(nullptr);
-    argv = const_cast<char **>(bashcmd.data());
-  }
-  execvp(argv0, argv);
-  perror(argv0);
-  _exit(1);
 }
 
 std::unique_ptr<Options>
