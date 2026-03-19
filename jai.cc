@@ -67,7 +67,6 @@ struct Config {
   void unmount();
   void unmountall();
   std::unique_ptr<Options> opt_parser();
-  void make_default_conf();
 
   bool parse_config_file(path file, Options *opts = nullptr);
   std::vector<const char *> make_env();
@@ -327,6 +326,8 @@ Config::make_blacklist(int dfd, path name)
 {
   Fd blacklistfd = ensure_dir(dfd, name.c_str(), 0700, kFollow);
   check_user(*blacklistfd);
+  if (is_mountpoint(*blacklistfd))
+    err("{}: directory must not be a mountpoint", fdpath(*blacklistfd));
 
   for (path p : mask_files_) {
     try {
@@ -666,19 +667,6 @@ Config::unmountall()
   unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
 }
 
-void
-Config::make_default_conf()
-{
-  auto fd = xopenat(home_jai(), ".", O_RDWR | O_TMPFILE | O_CLOEXEC, 0600);
-  errno = EAGAIN;
-  if (write(*fd, default_conf.data(), default_conf.size()) !=
-      default_conf.size())
-    syserr("write(O_TMPFILE for default.conf)");
-  if (linkat(*fd, "", home_jai(), "default.conf", AT_EMPTY_PATH) &&
-      errno != EEXIST)
-    syserr("linkat({})", fdpath(home_jai(), "default.conf"));
-}
-
 extern "C" char **environ;
 
 std::vector<const char *>
@@ -1009,12 +997,12 @@ The default is CMD.conf if it exists, otherwise default.conf)",
   (*opts)("--help", [] { usage(0); });
   (*opts)("--version", version, "Print copyright and version then exit");
   (*opts)(
-      "--print-default-conf",
+      "--print-defaults",
       [] {
-        write(1, default_conf.data(), default_conf.size());
+        write(1, jai_defaults.data(), jai_defaults.size());
         exit(0);
       },
-      "Show contents of the default configuration file");
+      "Show default contents of $JAI_CONFIG_DIR/.defaults");
   option_help = opts->help();
 
   std::vector<char *> cmd;
@@ -1037,16 +1025,17 @@ The default is CMD.conf if it exists, otherwise default.conf)",
     return;
   }
 
+  ensure_file(conf.home_jai(), ".defaults", jai_defaults, 0600);
+  ensure_file(conf.home_jai(), "default.conf", jai_defaults, 0600);
+
   if (!opt_C.empty()) {
     if (!conf.parse_config_file(opt_C))
       err("{}: no such configuration file", opt_C.string());
   }
   else if ((cmd.empty() || !conf.name_ok(cmd[0]) ||
             !conf.parse_config_file(std::format("{}.conf", cmd[0]))) &&
-           !conf.parse_config_file("default.conf")) {
-    conf.make_default_conf();
+           !conf.parse_config_file("default.conf"))
     conf.parse_config_file("default.conf");
-  }
   // Re-parse command line to override files
   opts->parse_argv(argc, argv);
 

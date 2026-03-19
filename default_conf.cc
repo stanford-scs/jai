@@ -1,45 +1,69 @@
 
 #include "jai.h"
 
-const std::string default_conf =
-    R"(# Note: instead of copying this file to create a custom configuration
-# for certain commands, you can include this file by referernce with a
-# line "conf default.conf" in your new configuration file.
+const std::string jai_defaults =
+    R"(# This file contains generic defaults built into jai.  It is intended
+# to be included by other configuration files with a line:
+#
+#     conf .defaults
+#
+# You can override settings in this file by editing it directly or by
+# adding configuration directives to default.conf or other <name>.conf
+# files after the `conf .defaults` line.  (Later lines override
+# previous ones in configuration files.)
+#
+# If you delete this file, jai will re-create it the next time it
+# runs.  You can also see the default contents of this file by running
+#
+#     jai --print-defaults
 
-# The default mode is strict for all named sandboxes and casual for
-# the default sandbox.  A strict sandbox runs under the dedicated jai
-# UID and starts with an empty home directory.  A casual sandbox runs
-# with your own UID and makes your home directory copy-on-write via an
-# overlay mount.  To change the default, you can uncomment one of the
-# following:
+
+# By default, jai stores private home directory state in $HOME/.jai
+# (or in $JAI_CONFIG_DIR, if set).  However, jai works best if the
+# storage directory is not on NFS.  If your home directory is on NFS,
+# use a `storage` directive to specify a local storage location.
+
+# storage /some/local/directory
+
+# The default mode is strict for all named jails and casual for the
+# default jail.  A strict jail runs under the dedicated jai UID and
+# starts with an empty home directory.  A casual jail runs with your
+# own UID and makes your home directory copy-on-write via an overlay
+# mount.  Strict mode cannot grant unrestricted access to directories
+# on NFS file systems.  You will have to use bare mode (which gives
+# you a bare home directory, but still runs with your UID) to expose
+# NFS directories.  Uncomment any of the following to set the mode:
 
 # mode casual
 # mode bare
 # mode strict
 
-# You can use use "name NAME" to specify different sandboxes.  For
-# casual sandboxes, the sandboxed home directory will be in
-# /run/jai/$USER/NAME.home, and changed files will be in
-# $HOME/.jai/NAME.changes.  For strict sandboxes, the home directory
-# will be $HOME/.jai/NAME.home.  If you leave it undefined, the name
-# will be "default" and the mode will default to casual, but if you
-# define this to anything including "default", then the mode will be
-# strict.
+# You can use use "name NAME" to specify different jails.  For casual
+# jails, the home directory will be in /run/jai/$USER/NAME.home, and
+# changed files will be in $HOME/.jai/NAME.changes.  For strict jails,
+# the home directory will be $HOME/.jai/NAME.home.  If you leave name
+# undefined, the name will be "default" and the mode will default to
+# casual, but if you define this to anything including "default", then
+# the default mode will be strict.
 
 # name default
 
-# jai launches programs in a sandbox by running bash with the command
-# name in "$0" and the arguments in "@".  Altering command allow you
-# to set enfironment variables or add command-line arguments.
+# jai launches jailed programs by running bash with the command name
+# in "$0" and the arguments in "@".  Altering command allows you set
+# environment variables dynamically or add command-line arguments,
+# which is more useful to do in a non-default configuration file.
 
-command "$0" "$@"
+# command "$0" "$@"
 
 # Masked files are deleted when an overlayfs is first created, but
 # have no effect on existing overlays or on strict/bare jails.  To
 # delete files from an existing overlay, delete them under
 # /run/jai/$USER/default.home.  Otherwise, to apply new mask
 # directives after editing this file, you can run "jai -u" to unmount
-# any existing overlays.
+# any existing overlays.  If you want to avoid masing any of these
+# files in one particular configuration, you can use a directive such
+# as `unmask .aws` to undo the effects from a previously included
+# default file.
 
 mask .jai
 mask .ssh
@@ -62,9 +86,11 @@ mask .config/BraveSoftware
 mask .bash_history
 mask .zsh_history
 
-# The following environment variables will be removed from sandboxed
+# The following environment variables will be removed from jail
 # environments.  You can use * as a wildcard to match any variables
-# matching the pattern.
+# matching the pattern.  If you want to undo any of these unsetenv
+# commands in a particular config file, you can use setenv to reverse
+# the effects of unsetenv.
 
 unsetenv AZURE_CLIENT_ID
 unsetenv AZURE_TENANT_ID
@@ -96,4 +122,8 @@ unsetenv *_SOCK
 unsetenv *_SOCKET
 unsetenv *_SOCKET_PATH
 unsetenv *_TOKEN
+)";
+
+extern const std::string default_conf =
+  R"(conf .defaults
 )";

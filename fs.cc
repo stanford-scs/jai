@@ -341,15 +341,24 @@ open_flags_to_string(int flags)
       {O_TMPFILE, "O_TMPFILE"},
   });
   static constexpr auto known_flags = std::to_array<Flag>({
-      {O_WRONLY, "O_WRONLY"},       {O_RDWR, "O_RDWR"},
-      {O_CREAT, "O_CREAT"},         {O_EXCL, "O_EXCL"},
-      {O_NOCTTY, "O_NOCTTY"},       {O_TRUNC, "O_TRUNC"},
-      {O_APPEND, "O_APPEND"},       {O_NONBLOCK, "O_NONBLOCK"},
-      {O_DSYNC, "O_DSYNC"},         {O_ASYNC, "O_ASYNC"},
-      {O_DIRECT, "O_DIRECT"},       {O_LARGEFILE, "O_LARGEFILE"},
-      {O_DIRECTORY, "O_DIRECTORY"}, {O_NOFOLLOW, "O_NOFOLLOW"},
-      {O_NOATIME, "O_NOATIME"},     {O_CLOEXEC, "O_CLOEXEC"},
-      {O_SYNC, "O_SYNC"},           {O_PATH, "O_PATH"},
+      {O_WRONLY, "O_WRONLY"},
+      {O_RDWR, "O_RDWR"},
+      {O_CREAT, "O_CREAT"},
+      {O_EXCL, "O_EXCL"},
+      {O_NOCTTY, "O_NOCTTY"},
+      {O_TRUNC, "O_TRUNC"},
+      {O_APPEND, "O_APPEND"},
+      {O_NONBLOCK, "O_NONBLOCK"},
+      {O_DSYNC, "O_DSYNC"},
+      {O_ASYNC, "O_ASYNC"},
+      {O_DIRECT, "O_DIRECT"},
+      {O_LARGEFILE, "O_LARGEFILE"},
+      {O_DIRECTORY, "O_DIRECTORY"},
+      {O_NOFOLLOW, "O_NOFOLLOW"},
+      {O_NOATIME, "O_NOATIME"},
+      {O_CLOEXEC, "O_CLOEXEC"},
+      {O_SYNC, "O_SYNC"},
+      {O_PATH, "O_PATH"},
   });
 
   std::string result;
@@ -424,5 +433,38 @@ try_read_file(int dfd, path file)
       return std::unexpected(
           std::system_error(errno, std::system_category(), fdpath(fd, file)));
     ret.append(buf, size_t(n));
+  }
+}
+
+Fd
+ensure_file(int dfd, path file, std::string_view contents, int mode)
+{
+  assert(!file.empty());
+  for (;;) {
+    if (Fd fd = openat(dfd, file.c_str(), O_RDONLY | O_CLOEXEC)) {
+      if (!S_ISREG(xfstat(*fd).st_mode))
+        err("{}: not a regular file", fdpath(dfd, file));
+      return fd;
+    }
+    if (errno != ENOENT)
+      syserr("{}", fdpath(dfd, file));
+
+    auto pp = file.parent_path();
+    if (pp.empty())
+      pp = ".";
+    Fd fd = xopenat(dfd, pp, O_TMPFILE | O_RDWR | O_CLOEXEC);
+    for (size_t i = 0; i < contents.size();) {
+      if (auto n = write(*fd, contents.data() + i, contents.size() - i); n < 0)
+        syserr(R"(write(O_TMPFILE for "{}"))", fdpath(dfd, file));
+      else
+        i += n;
+    }
+
+    if (linkat(*fd, "", dfd, file.c_str(), AT_EMPTY_PATH) == 0)
+      return fd;
+    if (errno != EEXIST)
+      syserr(R"(linkat(O_TMPFILE -> "{}"))", fdpath(dfd, file));
+    if (!S_ISREG(xfstat(dfd, file).st_mode))
+      err("{}: not a regular file", fdpath(dfd, file));
   }
 }

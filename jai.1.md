@@ -242,6 +242,9 @@ environment before running the command.
   you must use this option if you have added new files to be masked,
   as masking only takes effect at the time an overlay home is created.
 
+`--print-defaults`
+: Prints the default contents for `$HOME/.jai/.defaults`.
+
 `--version`
 : Prints the version number and copyright.
 
@@ -277,12 +280,21 @@ setting the `JAI_CONFIG_DIR` environment variable.
   file for *cmd*, then *cmd*`.conf` is used.  Otherwise `default.conf`
   is used.
 
+`$HOME/.jai/.defaults`
+: Reasonable system defaults to be included in `defaults.conf` or
+  *cmd*`.conf`.  This file is created automatically by jai.  The file
+  has no effect if you don't include it, but you should probably begin
+  all configuration files with the line `conf .defaults` to get the
+  defaults.
+
 `$HOME/.jai/default.changes`, `$HOME/.jai/`*name*`.changes`
 : This "upper" directory is overlaid on your home directory and
-  contains changes that have been made inside a jail.  If you make
-  changes in this directory, you may need to tear down and recreate
-  the sandboxed home directory with `jai -u`.  The non-default version
-  is used when you specify `-n` *name* on the command line.
+  contains changes that have been made inside a casual jail.  If you
+  make changes in this directory, you may need to tear down and
+  recreate the sandboxed home directory with `jai -u`.  The
+  non-default version is used when you specify `-n` *name* on the
+  command line.  If you specified `--storage=`*dir*, the changes
+  directory will be in *dir* instead of `$HOME/.jai`.
 
 `$HOME/.jai/default.work`, `$HOME/.jai/`*name*`.work`
 : This "work" directory is required by overlayfs, but does not contain
@@ -290,15 +302,22 @@ setting the `JAI_CONFIG_DIR` environment variable.
   system may create files in here that you cannot delete.  If you are
   trying to blow away an overlay directory to start from scratch and
   cannot delete this directory, try running `jay -u` which will clean
-  things up.
+  things up.  If you specified `--storage=`*dir*, or used a symbolic
+  link for your changes directory, then the work directory will always
+  be next to the changes directory wherever that lives.
+
+`$HOME/.jai/default.home`, `$HOME/.jai/`*name*`.home`
+: Private home directory for bare and strict jails.  If you specified
+  `--storage=`*dir*, the these directories will be in *dir* instead.
 
 `/run/jai/$USER/default.home`, `/run/jai/$USER/`*name*`.home`
-: Sandboxed home directories for jails.  You can delete files with
-  sensitive data in these sandboxed directories to hide theme from
-  jailed processes, or see the `--mask` option.
+: Home directories for casual jails.  You can delete files with
+  sensitive data in these jail directories to hide theme from jailed
+  processes, or see the `--mask` option.
 
 `/run/jai/$USER/tmp/default`, `/run/jai/$USER/tmp/`*name*
-: Private `/tmp` and `/var/tmp` directory made available in the jail.
+: Private `/tmp` and `/var/tmp` directory (they are the same) in
+  jails.
 
 # BUGS
 

@@ -239,11 +239,16 @@ xpipe()
 }
 
 inline struct stat
-xfstat(int fd)
+xfstat(int fd, path file = {}, FollowLinks follow = kFollow)
 {
   struct stat sb;
-  if (fstat(fd, &sb))
-    syserr(R"(fstat("{}"))", fdpath(fd));
+  if (file.empty()) {
+    if (fstat(fd, &sb))
+      syserr(R"(fstat("{}"))", fdpath(fd));
+  }
+  else if (fstatat(fd, file.c_str(), &sb,
+                   follow == kFollow ? 0 : AT_SYMLINK_NOFOLLOW))
+    syserr(R"({}stat("{}"))", follow == kFollow ? "" : "l", fdpath(fd, file));
   return sb;
 }
 
@@ -258,6 +263,8 @@ read_file(int dfd, path file = {})
   else
     throw res.error();
 }
+
+Fd ensure_file(int dfd, path file, std::string_view contents, int mode = 0600);
 
 using ACL = RaiiHelper<acl_free, acl_t>;
 

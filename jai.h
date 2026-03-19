@@ -27,4 +27,5 @@ xfork(std::uint64_t flags = 0)
     }                                                                          \
   } while (0)
 
+extern const std::string jai_defaults;
 extern const std::string default_conf;
