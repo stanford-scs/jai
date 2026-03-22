@@ -22,8 +22,12 @@ const std::string jai_defaults =
 # (or in $JAI_CONFIG_DIR, if set).  However, jai works best if the
 # storage directory is not on NFS.  If your home directory is on NFS,
 # use a `storage` directive to specify a local storage location.
+# Environment variables named in ${...} will be substituted.  The
+# storage directory will automatically be organized into per-sandbox
+# subdirectories, so most configurations should use the sandbox
+# location.
 
-# storage /some/local/directory
+# storage /some/local/directory/${JAI_USER}/.jai
 
 # The default mode is strict for all named jails and casual for the
 # default jail.  A strict jail runs under the dedicated jai UID and
@@ -93,20 +97,9 @@ mask .zsh_history
 # commands in a particular config file, you can use setenv to reverse
 # the effects of unsetenv.
 
-unsetenv AZURE_CLIENT_ID
-unsetenv AZURE_TENANT_ID
-unsetenv DATABASE_URL
-unsetenv MONGO_URI
-unsetenv MONGODB_URI
-unsetenv REDIS_URL
-unsetenv GOOGLE_APPLICATION_CREDENTIALS
-unsetenv KUBECONFIG
-unsetenv BB_AUTH_STRING
-unsetenv SENTRY_DSN
-unsetenv SLACK_WEBHOOK_URL
 unsetenv *_ACCESS_KEY
-unsetenv *_API_KEY
 unsetenv *_APIKEY
+unsetenv *_API_KEY
 unsetenv *_AUTH
 unsetenv *_AUTH_TOKEN
 unsetenv *_CONNECTION_STRING
@@ -123,6 +116,32 @@ unsetenv *_SOCK
 unsetenv *_SOCKET
 unsetenv *_SOCKET_PATH
 unsetenv *_TOKEN
+unsetenv AZURE_CLIENT_ID
+unsetenv AZURE_TENANT_ID
+unsetenv BB_AUTH_STRING
+unsetenv DATABASE_URL
+unsetenv GOOGLE_APPLICATION_CREDENTIALS
+unsetenv KUBECONFIG
+unsetenv MAIL
+unsetenv MONGODB_URI
+unsetenv MONGO_URI
+unsetenv REDIS_URL
+unsetenv SENTRY_DSN
+unsetenv SLACK_WEBHOOK_URL
+
+# The following environment variables get set in sandboxes.  You can
+# substitute existing environment variables (before any
+# unsetenv/setenv have been applied) by including them in ${...}.  Two
+# additional environment variables will be set that you can reference:
+#
+#  ${JAI_NAME} - the name of the sandbox
+#  ${JAI_USER} - the outside user invoking the sandbox
+#
+# (Note JAI_MODE is set in the sandbox's enfironment but not available
+# during configuration, since it can change during configuration.)
+
+setenv USER=${JAI_USER}
+setenv LOGNAME=${JAI_USER}
 )";
 
 extern const std::string default_conf =
