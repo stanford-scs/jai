@@ -217,12 +217,12 @@ opencode`):
   default.conf` (assuming you don't have a file `default` in addition
   to `default.conf`).
 
-  If no configuration file is specified, the default is based on the
+    If no configuration file is specified, the default is based on the
   *cmd* argument.  If *cmd* contains no slashes and does not start
   with `.`, the system will use `$HOME/.jai/`*cmd*`.conf` if such a
   file exists.  Otherwise it uses `$HOME/.jai/default.conf`.
 
-  Note that command-line arguments are parsed both before and after
+    Note that command-line arguments are parsed both before and after
   the file specified by the `-C` or `--conf` option.  Hence,
   command-line options always take precedence over configuration
   files.  When `conf` is specified in a configuration file, however,
@@ -277,14 +277,14 @@ opencode`):
   specified (strict by default) will become the default for that jail,
   though you can change it in the file `$HOME/.jai/`*name*`.jail`.
 
-  Note that if you switch modes, the same *name* can have both a
+    Note that if you switch modes, the same *name* can have both a
   casual home directory (accessible at `/run/jai/$USER/`*name*`.home`,
   with changes going in `$HOME/.jai/`*name*`.changes`) and a
   strict/bare home directory (in `$HOME/.jai/`*name*`.home`).  There
   is no special relation between these two home directories, but all
   jails by the name *name* share the same `/tmp` directory.
 
-  Note that you are not allowed to use the `jail` configuration option
+    Note that you are not allowed to use the `jail` configuration option
   in a `.jail` file or any configuration file included by the `.jail`
   file.
 
@@ -357,7 +357,7 @@ uses `\` to escape the next character.
   private `/tmp` and `/var/tmp` directories (same directory at both
   mount points), so make sure you don't need anything in there.
 
-  Overlay mounts for casual jails are created under
+    Overlay mounts for casual jails are created under
   `/run/jai/$USER/*.home` and left around between invocations of jai.
   If you wish to change "upper" directories `$HOME/.jai/*.changes`,
   the changes may not take effect until the file system is unmounted
