@@ -265,6 +265,12 @@ xfstat(int fd, path file = {}, FollowLinks follow = kFollow)
   return sb;
 }
 
+std::string read_fd(int fd);
+
+// This tries to read a file.  It will return an error if the file
+// cannot be opened (e.g., because it does not exist), but could still
+// throw if reading the actual file returns an error or allocating the
+// buffer exhausts memory.
 std::expected<std::string, std::system_error> try_read_file(int dfd,
                                                             path file = {});
 
@@ -277,7 +283,8 @@ read_file(int dfd, path file = {})
     throw res.error();
 }
 
-Fd ensure_file(int dfd, path file, std::string_view contents, int mode = 0600);
+Fd ensure_file(int dfd, path file, std::string_view contents, int mode = 0600,
+               bool *created = nullptr);
 
 using ACL = RaiiHelper<acl_free, acl_t>;
 

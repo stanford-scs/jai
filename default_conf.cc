@@ -29,14 +29,14 @@ const std::string jai_defaults =
 
 # storage /some/local/directory/${JAI_USER}/.jai
 
-# The default mode is strict for all named jails and casual for the
-# default jail.  A strict jail runs under the dedicated jai UID and
-# starts with an empty home directory.  A casual jail runs with your
-# own UID and makes your home directory copy-on-write via an overlay
-# mount.  Strict mode cannot grant unrestricted access to directories
-# on NFS file systems.  You will have to use bare mode (which gives
-# you a bare home directory, but still runs with your UID) to expose
-# NFS directories.  Uncomment any of the following to set the mode:
+# The default mode is strict.  A strict jail runs under the dedicated
+# jai UID and starts with an empty home directory.  A casual jail runs
+# with your own UID and makes your home directory copy-on-write via an
+# overlay mount.  Strict mode cannot grant unrestricted access to
+# directories on NFS file systems.  You will have to use bare mode
+# (which gives you a bare home directory, but still runs with your
+# UID) to expose NFS directories.  Uncomment any of the following to
+# set the mode, or override it in individual .jail files:
 
 # mode casual
 # mode bare
@@ -50,7 +50,7 @@ const std::string jai_defaults =
 # casual, but if you define this to anything including "default", then
 # the default mode will be strict.
 
-# name default
+# jail default
 
 # jai launches jailed programs by running bash with the command name
 # in "$0" and the arguments in "@".  Altering command allows you set
@@ -146,5 +146,12 @@ extern const std::string default_conf =
 # jai(1) man page for details.
 
 conf .defaults
+
+)";
+
+extern const std::string default_jail =
+  R"(# Set casual mode for the default jail.
+
+mode casual
 
 )";

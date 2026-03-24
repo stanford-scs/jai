@@ -85,11 +85,12 @@ constexpr const char *kRunRoot = "/run/jai";
 
 extern const std::string jai_defaults;
 extern const std::string default_conf;
+extern const std::string default_jail;
 
 struct Config {
-  enum Mode { kInvalidMode, kCasual, kBare, kStrict };
+  enum Mode { kCasual, kBare, kStrict };
 
-  Mode mode_{kInvalidMode};
+  Mode mode_{kStrict};
   PathSet grant_directories_;
   bool grant_cwd_{true};
   std::set<std::string, std::less<>> env_filter_;
@@ -98,7 +99,7 @@ struct Config {
   std::string shellcmd_;
   PathSet mask_files_;
   bool mask_warn_{};
-  bool dir_relative_to_home_{};
+  bool parsing_config_file_{};
 
   std::string user_;
   path homepath_;
@@ -127,8 +128,9 @@ struct Config {
   void exec(int nsfd, char **argv);
   void unmount();
   void unmountall();
-  std::unique_ptr<Options> opt_parser();
+  std::unique_ptr<Options> opt_parser(bool dotjail = false);
 
+  void parse_config_fd(int fd, Options *opts = nullptr);
   bool parse_config_file(path file, Options *opts = nullptr);
   std::vector<const char *> make_env();
 
@@ -139,8 +141,14 @@ struct Config {
 
   [[nodiscard]] static Defer asuser(const Credentials *crp);
   [[nodiscard]] Defer asuser() { return asuser(&user_cred_); }
-  void check_user(int fd, std::string path_for_error = {},
+  void check_user(const struct stat &sb, std::string path_for_error = {},
                   bool untrusted_ok = false);
+  void check_user(int fd, std::string path_for_error = {},
+                  bool untrusted_ok = false)
+  {
+    check_user(xfstat(fd), path_for_error.empty() ? fdpath(fd) : path_for_error,
+               untrusted_ok);
+  }
   Fd ensure_udir(int dfd, const path &p, mode_t perm = 0700,
                  FollowLinks follow = kFollow)
   {
@@ -182,6 +190,24 @@ struct Config {
            user_, sandbox_name_.string(), "", prog.filename().string().size(),
            prog.filename().string(), kRunRoot);
       mask_warn_ = false;
+    }
+  }
+};
+
+template<> struct std::formatter<Config::Mode> : std::formatter<const char *> {
+  using super = std::formatter<const char *>;
+  auto format(Config::Mode m, auto &&ctx) const
+  {
+    using enum Config::Mode;
+    switch (m) {
+    case kStrict:
+      return super::format("strict", ctx);
+    case kBare:
+      return super::format("bare", ctx);
+    case kCasual:
+      return super::format("casual", ctx);
+    default:
+      err<std::logic_error>("Config::Mode with bad value {}", int(m));
     }
   }
 };

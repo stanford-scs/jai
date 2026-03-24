@@ -20,11 +20,26 @@
 
 path prog;
 
+void
+Config::parse_config_fd(int fd, Options *opts)
+{
+  auto ld = fdpath(fd, true);
+  if (auto [_it, ok] = config_loop_detect_.insert(ld); !ok)
+    err<Options::Error>("configuration loop");
+  Defer _clear([this, ld, pch = parsing_config_file_] {
+    config_loop_detect_.erase(ld);
+    parsing_config_file_ = pch;
+  });
+  parsing_config_file_ = true;
+  auto go = [&](Options *o) { o->parse_file(read_file(fd), ld); };
+  go(opts ? opts : opt_parser().get());
+}
+
 bool
 Config::parse_config_file(path file, Options *opts)
 {
   bool slash = std::ranges::distance(file.begin(), file.end()) > 1;
-  bool fromcwd = slash && !dir_relative_to_home_;
+  bool fromcwd = slash && !parsing_config_file_;
 
   if (struct stat sb;
       !slash && file.extension() != ".conf" &&
@@ -33,26 +48,13 @@ Config::parse_config_file(path file, Options *opts)
       S_ISREG(sb.st_mode))
     file += ".conf";
 
-  auto ld = (fromcwd ? cwd() : homejaipath_) / file;
-  if (auto [_it, ok] = config_loop_detect_.insert(ld); !ok)
-    err<Options::Error>("configuration loop");
-  Defer _clear{[this, ld = std::move(ld), drh = dir_relative_to_home_] {
-    config_loop_detect_.erase(ld);
-    if (!drh)
-      dir_relative_to_home_ = false;
-  }};
-  dir_relative_to_home_ = true;
-
-  auto r = try_read_file(fromcwd ? AT_FDCWD : home_jai(), file);
-  if (!r) {
-    if (r.error().code() == std::errc::no_such_file_or_directory)
+  Fd fd = openat(fromcwd ? AT_FDCWD : home_jai(), file.c_str(), O_RDONLY);
+  if (!fd) {
+    if (errno == ENOENT)
       return false;
-    throw r.error();
+    syserr("{}", file.c_str());
   }
-  if (opts)
-    opts->parse_file(*r, ld.string());
-  else
-    opt_parser()->parse_file(*r, ld.string());
+  parse_config_fd(*fd, opts);
   return true;
 }
 
@@ -146,16 +148,15 @@ Config::asuser(const Credentials *crp)
 }
 
 void
-Config::check_user(int fd, std::string p, bool untrusted_ok)
+Config::check_user(const struct stat &sb, std::string p, bool untrusted_ok)
 {
-  if (auto sb = xfstat(fd); sb.st_uid != user_cred_.uid_) {
+  if (sb.st_uid != user_cred_.uid_) {
     if (!untrusted_ok)
-      err("{}: owned by {} should be owned by {}", p.empty() ? fdpath(fd) : p,
-          sb.st_uid, user_cred_.uid_);
+      err("{}: owned by {} should be owned by {}", p, sb.st_uid,
+          user_cred_.uid_);
     else if (sb.st_uid != untrusted_cred_.uid_)
-      err("{}: owned by {} should be owned by {} or {}",
-          p.empty() ? fdpath(fd) : p, sb.st_uid, user_cred_.uid_,
-          untrusted_cred_.uid_);
+      err("{}: owned by {} should be owned by {} or {}", p, sb.st_uid,
+          user_cred_.uid_, untrusted_cred_.uid_);
   }
 }
 
@@ -419,10 +420,7 @@ Config::make_mnt_ns()
   if (mode_ == kStrict && !strict_ok)
     err("Cannot use strict mode: invalid user {}", kUntrustedUser);
 
-  if (mode_ == kInvalidMode)
-    mode_ = sandbox_name_.empty() ? kCasual : strict_ok ? kStrict : kBare;
-  if (sandbox_name_.empty())
-    sandbox_name_ = "default";
+  assert(!sandbox_name_.empty());
 
   mount_attr attr{
       .attr_set = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV,
@@ -501,7 +499,7 @@ Config::make_mnt_ns()
     restore_root = asuser();
     Fd dst = openat(-1, d.c_str(), O_DIRECTORY | O_PATH | O_CLOEXEC);
     if (!dst) {
-      if (mode_ == kCasual || (errno != EACCES && errno != ENOENT))
+      if (mode_ != kStrict || (errno != EACCES && errno != ENOENT))
         syserr("{}", d.string());
       restore_root.reset();
       restore_root = asuser(sbcred);
@@ -513,14 +511,12 @@ Config::make_mnt_ns()
   }
 
   xsetns(*newns, CLONE_NEWNS);
-  struct stat sb;
 
-  if (!storagedir_.empty() && stat(storagedir_.c_str(), &sb) == 0 &&
-      S_ISDIR(sb.st_mode)) {
-    // make sure storage directory not exposed
-    auto restore_root = asuser();
-    Fd target = xopenat(AT_FDCWD, storagedir_.c_str(), O_DIRECTORY | O_RDONLY);
-    check_user(*target);
+  auto blockdir = [this, &oldns, &newns, &sbcred](const path &p) {
+    assert(p.is_absolute());
+    auto restore_root = asuser(sbcred);
+    Fd target = xopenat(AT_FDCWD, p, O_DIRECTORY | O_RDONLY);
+    check_user(*target, p, true);
     restore_root.reset();
     Fd empty = xopenat(-1, kRunRoot, O_RDONLY);
     if (!is_dir_empty(*empty))
@@ -532,7 +528,10 @@ Config::make_mnt_ns()
                               .propagation = MS_PRIVATE,
                           });
     xmnt_move(*source, *target);
-  }
+  };
+  blockdir(storagedir_);
+  if (homejaipath_ != storagedir_)
+    blockdir(homejaipath_);
 
   return newns;
 }
@@ -928,12 +927,8 @@ try {
     argv = const_cast<char **>(bashcmd.data());
   }
 
-  setenv("JAI_NAME", sandbox_name_.c_str(), 1);
-  setenv("JAI_MODE",
-         mode_ == kStrict ? "strict"
-         : mode_ == kBare ? "bare"
-                          : "casual",
-         1);
+  setenv("JAI_JAIL", sandbox_name_.c_str(), 1);
+  setenv("JAI_MODE", std::format("{}", mode_).c_str(), 1);
   auto env = make_env();
 
   execvpe(argv0, argv, const_cast<char **>(env.data()));
@@ -945,7 +940,7 @@ try {
 }
 
 std::unique_ptr<Options>
-Config::opt_parser()
+Config::opt_parser(bool dotjail)
 {
   auto ret = std::make_unique<Options>();
   Options &opts = *ret;
@@ -953,10 +948,7 @@ Config::opt_parser()
       "-m", "--mode",
       [this](std::string_view m) {
         static const std::map<std::string, Mode, std::less<>> modemap{
-            {"default", kInvalidMode},
-            {"casual", kCasual},
-            {"bare", kBare},
-            {"strict", kStrict}};
+            {"casual", kCasual}, {"bare", kBare}, {"strict", kStrict}};
         if (auto it = modemap.find(m); it != modemap.end())
           mode_ = it->second;
         else
@@ -972,20 +964,32 @@ Config::opt_parser()
       "-d", "--dir",
       [this](path d) {
         grant_directories_.emplace(
-            canonical(dir_relative_to_home_ ? homepath_ / d : d));
+            canonical(parsing_config_file_ ? homepath_ / d : d));
       },
       "Grant full access to DIR.", "DIR");
   opts(
+      "-x", "--xdir",
+      [this](path d) {
+        grant_directories_.erase(
+            canonical(parsing_config_file_ ? homepath_ / d : d));
+      },
+      "undo the effects of a previous --dir option", "DIR");
+  opts(
       "-D", "--nocwd", [this] { grant_cwd_ = false; },
       "Do not grant access to the current working directory");
-  opts(
-      "-n", "--name",
-      [this](path sb) {
-        if (!name_ok(sb))
-          err<Options::Error>("{}: invalid sandbox name", sb.string());
-        sandbox_name_ = sb;
-      },
-      "Use private or overlay home directory named NAME", "NAME");
+  if (!dotjail)
+    opts(
+        "-j", "--jail",
+        [this](path sb) {
+          if (!name_ok(sb))
+            err<Options::Error>("{}: invalid sandbox name", sb.string());
+          sandbox_name_ = sb;
+        },
+        "Use private or overlay home directory named NAME", "NAME");
+  else
+    opts("-j", "--jail", [](path) {
+      err<Options::Error>("cannot set name from a .jail file or include");
+    });
   opts("--conf", [this, opts = ret.get()](path file) {
     if (!parse_config_file(file, opts))
       err<Options::Error>("{}: configuration file not found", file.string());
@@ -1038,7 +1042,7 @@ Config::opt_parser()
       "--storage",
       [this](std::string_view s) {
         auto sd = var_expand(s);
-        if (dir_relative_to_home_)
+        if (parsing_config_file_)
           storagedir_ = homepath_ / sd;
         else
           storagedir_ = sd;
@@ -1126,6 +1130,7 @@ The default is CMD.conf if it exists, otherwise default.conf)",
 
   ensure_file(conf.home_jai(opt_init), ".defaults", jai_defaults, 0600);
   ensure_file(conf.home_jai(), "default.conf", default_conf, 0600);
+  ensure_file(conf.storage(), "default.jail", default_jail, 0600);
 
   if (opt_init) {
     std::println("You can edit the configuration defaults in {}/.defaults",
@@ -1151,6 +1156,20 @@ The default is CMD.conf if it exists, otherwise default.conf)",
             !conf.parse_config_file(std::format("{}.conf", cmd[0]))) &&
            !conf.parse_config_file("default.conf"))
     conf.parse_config_file("default.conf");
+
+  // Re-parse command line to override files
+  opts->parse_argv(argc, argv);
+
+  bool createwarn = false;
+  if (conf.sandbox_name_.empty())
+    conf.sandbox_name_ = "default";
+  Fd dotjail =
+      ensure_file(conf.storage(), cat(conf.sandbox_name_, ".jail"),
+                  std::format("mode {}\n", conf.mode_), 0600, &createwarn);
+  if (createwarn)
+    warn("created {}", fdpath(*dotjail));
+  conf.parse_config_fd(*dotjail, conf.opt_parser(true).get());
+
   // Re-parse command line to override files
   opts->parse_argv(argc, argv);
 

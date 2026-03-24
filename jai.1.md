@@ -89,21 +89,31 @@ to expose whatever directory contains the changed files (e.g.,
 
 jai allows the use of multiple home directories for different jails.
 To use a home directory other than the default, just give it a name
-with the `-n` option and it will be created on demand.  When you
-specify a home directory with `-n`, strict mode becomes the default
-(unless there is no unprivileged `jai` user on your system, in which
-case jai falls back to bare mode).  It is possible to have multiple
-home overlays by specifying `-mcasual` with `-n`.
+with the `-j` option and it will be created on demand.  If you don't
+specify `-mcasual` or `-mbare`, strict mode will become the default
+for a newly created jail, but you can change this by editing the
+corresponding `.jail` file in `$HOME/.jai` or wherever your storage
+directory is.
 
 # CONFIGURATION
 
-If *cmd* does not contain any slashes, configuration is taken from
-`$HOME/.jai/`*cmd*`.conf`, or, if no such file exists, from
-`$HOME/.jai/default.conf`.
+Configuration comes from three sources: the command line, a `.conf`
+configuration file (which may include other files via `conf` options),
+and a `.jail` file specific to the named jail you are choosing.
+Command-line options override everything, and `.jail` files override
+`.conf` files.
 
-The format of configuration files is a series of lines of the form
-"*option* [*value*]".  *option* can be any long command-line option
-without the leading `--`, for example:
+If you don't specify a `.conf` file on the command line with the `-C`
+option, and if *cmd* does not contain any slashes, jai will first try
+to use `$HOME/.jai/`*cmd*`.conf` if that file exists, and otherwise
+will use `$HOME/.jai/default.conf` (which it will create if needed
+exist).  That way the `.conf` file can specify a jail name, and the
+`.jail` file can set the mode of the jail.
+
+The format of `.conf` and `.jail` configuration files is a series of
+lines of the form "*option* [*value*]" or "*option*`=`*value*.
+*option* can be any long command-line option without the leading `--`,
+for example:
 
     conf .defaults
     mode casual
@@ -111,14 +121,15 @@ without the leading `--`, for example:
     mask Mail
 
 If you want to set an option that requires an argument to the empty
-string, use an `=` sign, as in `storage=`.
+string, use an `=` sign, as in `storage=` to reset the default storage
+location.
 
 Within a configuration file, `conf` acts like an include directive,
 logically replacing the `conf` line with the contents of another
-configuration file.  (Relative paths are relative to `$HOME/.jai/`.)
-jai creates a file `.defaults` with a sensible set of defaults you
-should probably include directly or indirectly in any configuration
-file.
+configuration file.  Relative paths are relative to `$HOME/.jai/` (or
+`$JAI_CONFIG_DIR` if set).  jai creates a file `.defaults` with a
+sensible set of defaults you should probably include directly or
+indirectly in any `.conf` configuration file you write.
 
 jai executes jailed programs with bash.  The `command` directive
 allows you to reconfigure the environment or add command-line options
@@ -129,7 +140,7 @@ following:
     conf default.conf
     mode strict
     dir venv
-    name python
+    jail python
     command source $HOME/venv/bin/activate; "$0" "$@"
 
 If you run `jai python`, this configuration file will load a virtual
@@ -140,22 +151,18 @@ environment before running the command.
 To install claude code in a jail called `claude`:
 
     curl -fsSL https://claude.ai/install.sh | \
-        jai -D -mstrict -n claude bash
+        jai -D -mstrict -j claude bash
 
-To invoke claude code in that same jail, if $HOME/.local/bin is not
+To invoke claude code in that same jail, if `$HOME/.local/bin` is not
 already on your path:
 
-    PATH=$HOME/.local/bin:$PATH jai -n claude claude
+    PATH=$HOME/.local/bin:$PATH jai -j claude claude
 
 To make `jai claude` use the claude jail by default:
 
     cat <<<EOF >$HOME/.jai/claude.conf
     conf .defaults
-    name claude
-
-    # Mode already defaults to strict; change to bare if using NFS
-    mode strict
-
+    jail claude
     command PATH=$HOME/.local/bin:$PATH "$0" "$@"
     EOF
 
@@ -167,11 +174,12 @@ directory and merging them into your claude jail.
 
     # Extract cookies outside jail, merge them inside jail
     xauth extract - $DISPLAY | jai -C claude xauth merge -
-    # Copy a screen region you should be able to paste in claude
+
+    # Now copy a screen region to paste in claude
     import png:- | xclip -selection clipboard -t image/png
 
 A safer way to do this is to write your screengrabs directly into the
-sandbox's /tmp directory as in:
+sandbox's `/tmp` directory as in:
 
     import /run/jai/$USER/tmp/claude/scrn.png
 
@@ -188,12 +196,8 @@ directory:
 To do this by default when invoking `jai codex` (similar for `jai
 opencode`):
 
-    cat <<EOF >$HOME/.jai
+    cat <<EOF >$HOME/.jai/codex.conf
     conf .defaults
-    mode casual
-
-    # no need to specify name, will be "default" by default
-    # name default
 
     # list additional directories to expose
     dir .codex
@@ -233,6 +237,9 @@ opencode`):
   to the current working directory, while in configuration files, they
   are relative to your home directory.
 
+`-x` *dir*, `--xdir` *dir*
+: Reverse the effects of a previous `--dir` *dir* option.
+
 `-D`, `--nocwd`
 : By default, `jai` grants access to the current working directory
   even if it is not specified with `-d`.  This option suppresses that
@@ -254,7 +261,7 @@ opencode`):
   directory (`$HOME/.jai/`*name*`.home`), and jailed code runs with a
   different user id, `jai`.  Id-mapped mounts are used to map `jai` to
   the invoking user in granted directories.  Strict mode is the
-  default when you name a jail (see `--name`), but not for the default
+  default when you name a jail (see `--jail`), but not for the default
   jail.
 
     Bare mode uses an empty directory like strict mode, but runs with
@@ -262,18 +269,24 @@ opencode`):
   can be used for NFS-mounted home directories since NFS does not
   support id-mapped mounts.
 
-`-n` *name*, `--name` *name*
+`-j` *name*, `--jail` *name*
 : jai allows you to have multiple jailed home directories, which may
   be useful when jailing multiple tools that should not have access to
-  each other's API keys.  This option specifies which home directory
-  to use.  If no such jail exists yet, it will be created on demand.
-  When not specified, the default is just `default`.  Note that each
-  name can be associated with both a casual home directory (accessible
-  at `/run/jai/$USER/`*name*`.home`, with changes in
-  `$HOME/.jai/`*name*`.changes`) and a strict/bare home directory (in
-  `$HOME/.jai/`*name*`.home`).  There is no special relation between
-  these home directories, but casual and strict jails by the same name
-  do share the same `/tmp` directory.
+  each other's API keys.  This option specifies which jail to use.  If
+  no such jail exists yet, it will be created on demand and the mode
+  specified (strict by default) will become the default for that jail,
+  though you can change it in the file `$HOME/.jai/`*name*`.jail`.
+
+  Note that if you switch modes, the same *name* can have both a
+  casual home directory (accessible at `/run/jai/$USER/`*name*`.home`,
+  with changes going in `$HOME/.jai/`*name*`.changes`) and a
+  strict/bare home directory (in `$HOME/.jai/`*name*`.home`).  There
+  is no special relation between these two home directories, but all
+  jails by the name *name* share the same `/tmp` directory.
+
+  Note that you are not allowed to use the `jail` configuration option
+  in a `.jail` file or any configuration file included by the `.jail`
+  file.
 
 `--mask` *file*
 : When creating an overlay home directory, create a "whiteout" file to
@@ -361,6 +374,8 @@ uses `\` to escape the next character.
 
 # ENVIRONMENT
 
+The following environment variables affect jai's operation:
+
 `SUDO_USER`, `USER`
 : If jai is invoked with real UID 0 and either of these environment
   variables exists, it will be taken as the user whose home directory
@@ -374,12 +389,17 @@ uses `\` to escape the next character.
   wish to put your private home directories elsewhere in order to use
   casual mode.
 
-`JAI_NAME`
-: Set to the name of the jai instance (specified by `-n` or `--name`)
-  inside the jail.
+Jai sets the following environment variables inside jails:
 
 `JAI_MODE`
 : Set to the mode (strict, bare, or casual) inside a jail.
+
+`JAI_JAIL`
+: Set to the name of the jai instance (specified by `-j` or `--jail`)
+  inside the jail.
+
+`JAI_USER`
+: Set to the name of the user who invoked jai.
 
 # FILES
 
@@ -398,12 +418,22 @@ setting the `JAI_CONFIG_DIR` environment variable.
   all configuration files with the line `conf .defaults` to get the
   defaults.
 
+In the following paths, the location `$HOME/.jai` is changed by the
+`--storage` option.  In the absence of a `--storage` option, the
+location can be changed by the `JAI_CONFIG_DIR` environment variable.
+
+`$HOME/.jai/`*name*`.jail`
+: Configuration file for jail named *name*, read after and overriding
+  any settings in the `.conf` file.  Usually only sets `mode` for the
+  sandbox, but could also conceivably include `dir` and other options
+  except `jail`, which is disallowed.
+
 `$HOME/.jai/default.changes`, `$HOME/.jai/`*name*`.changes`
 : This "upper" directory is overlaid on your home directory and
   contains changes that have been made inside a casual jail.  Before
   directly changing this directory, tear down and recreate the
   sandboxed home directory with `jai -u`.  The non-default version is
-  used when you specify `-n` *name* on the command line.  If you
+  used when you specify `-j` *name* on the command line.  If you
   specified `--storage=`*dir*, the changes directory will be in *dir*
   instead of `$HOME/.jai`.
 
@@ -421,6 +451,9 @@ setting the `JAI_CONFIG_DIR` environment variable.
 : Private home directory for bare and strict jails.  If you specified
   `--storage=`*dir*, the these directories will be under *dir* instead
   of `$HOME/.jai`.
+
+The following paths are always fixed, regardless of environment
+variables or command-line options:
 
 `/run/jai/$USER/default.home`, `/run/jai/$USER/`*name*`.home`
 : Home directories for casual jails.  You can delete files with

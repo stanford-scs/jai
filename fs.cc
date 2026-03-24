@@ -398,6 +398,28 @@ set_fd_acl(int fd, const char *acltext, AclType which)
     syserr(R"(acl_set_file("{}", DEFAULT, {}))", fdpath(fd), acltext);
 }
 
+std::string
+read_fd(int fd)
+{
+  std::string ret;
+  if (auto sb = xfstat(fd); sb.st_size > 0x100'0000) {
+    // Let's not go crazy with sparse files and such
+    errno = EFBIG;
+    syserr("{}", fdpath(fd));
+  }
+  else if (sb.st_size > 0)
+    ret.reserve(sb.st_size);
+  for (;;) {
+    char buf[4096];
+    auto n = read(fd, buf, sizeof(buf));
+    if (n == 0)
+      return ret;
+    if (n < 0)
+      syserr("{}: read", fdpath(fd));
+    ret.append(buf, size_t(n));
+  }
+}
+
 std::expected<std::string, std::system_error>
 try_read_file(int dfd, path file)
 {
@@ -410,56 +432,45 @@ try_read_file(int dfd, path file)
           std::system_error(errno, std::system_category(), fdpath(fd, file)));
     fd = *fdholder;
   }
-
-  std::string ret;
-  if (auto sb = xfstat(fd); sb.st_size > 0x100'0000)
-    // Let's not go crazy with sparse files and such
-    err("{}: file too large", fdpath(fd));
-  else if (sb.st_size > 0)
-    ret.reserve(sb.st_size);
-  for (;;) {
-    char buf[4096];
-    auto n = read(fd, buf, sizeof(buf));
-    if (n == 0)
-      return ret;
-    if (n < 0)
-      return std::unexpected(
-          std::system_error(errno, std::system_category(), fdpath(fd, file)));
-    ret.append(buf, size_t(n));
-  }
+  return read_fd(fd);
 }
 
 Fd
-ensure_file(int dfd, path file, std::string_view contents, int mode)
+ensure_file(int dfd, path file, std::string_view contents, int mode,
+            bool *created)
 {
   assert(!file.empty());
-  for (;;) {
-    if (Fd fd = openat(dfd, file.c_str(), O_RDONLY | O_CLOEXEC)) {
-      if (!S_ISREG(xfstat(*fd).st_mode))
-        err("{}: not a regular file", fdpath(dfd, file));
-      return fd;
-    }
-    if (errno != ENOENT)
-      syserr("{}", fdpath(dfd, file));
 
-    path tmp = cat(file, std::format("~{}~", getpid()));
-    unlinkat(dfd, tmp.c_str(), 0);
-    Defer cleanup{[dfd, &tmp] { unlinkat(dfd, tmp.c_str(), 0); }};
-
-    Fd fd = xopenat(dfd, tmp.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC,
-                    mode);
-    for (size_t i = 0; i < contents.size();) {
-      if (auto n = write(*fd, contents.data() + i, contents.size() - i); n < 0)
-        syserr(R"(write(O_TMPFILE for "{}"))", fdpath(dfd, file));
-      else
-        i += n;
-    }
-    if (fsync(*fd))
-      syserr("fsync(\"{}\")", fdpath(*fd));
-    if (renameat(dfd, tmp.c_str(), dfd, file.c_str()))
-      syserr(R"(rename("{}" -> "{}") in "{}")", tmp.string(), file.string(),
-             fdpath(*fd));
-    cleanup.release();
+  if (Fd fd = openat(dfd, file.c_str(), O_RDONLY | O_CLOEXEC)) {
+    if (!S_ISREG(xfstat(*fd).st_mode))
+      err("{}: not a regular file", fdpath(dfd, file));
+    if (created)
+      *created = false;
     return fd;
   }
+  if (errno != ENOENT)
+    syserr("{}", fdpath(dfd, file));
+
+  path tmp = cat(file, std::format("~{}~", getpid()));
+  unlinkat(dfd, tmp.c_str(), 0);
+  Defer cleanup{[dfd, &tmp] { unlinkat(dfd, tmp.c_str(), 0); }};
+
+  Fd fd =
+      xopenat(dfd, tmp.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, mode);
+  for (size_t i = 0; i < contents.size();) {
+    if (auto n = write(*fd, contents.data() + i, contents.size() - i); n < 0)
+      syserr(R"(write(O_TMPFILE for "{}"))", fdpath(dfd, file));
+    else
+      i += n;
+  }
+  if (fsync(*fd))
+    syserr("fsync(\"{}\")", fdpath(*fd));
+  if (renameat(dfd, tmp.c_str(), dfd, file.c_str()))
+    syserr(R"(rename("{}" -> "{}") in "{}")", tmp.string(), file.string(),
+           fdpath(*fd));
+  cleanup.release();
+  if (created)
+    *created = true;
+  fd.reset();                   // have to reopen for reading
+  return xopenat(dfd, file.c_str(), O_RDONLY | O_CLOEXEC);
 }
