@@ -74,7 +74,7 @@ you don't want to grant your entire home directory to jailed
 processes.  If you are in your home directory, you can launch jai with
 `-D` to start in the sandboxed version of your home directory without
 granting anything.  If you really want to grant your entire home
-directory to the jail, you can do still do so by running `jai -Dd
+directory to the jail, you can still do so by running `jai -Dd
 $HOME`, but since that negates most of jai's protections, it would
 only make sense in unusual corner cases.
 
@@ -106,12 +106,12 @@ Command-line options override everything, and `.jail` files override
 If you don't specify a `.conf` file on the command line with the `-C`
 option, and if *cmd* does not contain any slashes, jai will first try
 to use `$HOME/.jai/`*cmd*`.conf` if that file exists, and otherwise
-will use `$HOME/.jai/default.conf` (which it will create if needed
-exist).  That way the `.conf` file can specify a jail name, and the
+will use `$HOME/.jai/default.conf` (which it will create if needed).
+That way the `.conf` file can specify a jail name, and the
 `.jail` file can set the mode of the jail.
 
 The format of `.conf` and `.jail` configuration files is a series of
-lines of the form "*option* [*value*]" or "*option*`=`*value*.
+lines of the form "*option* [*value*]" or "*option*`=`*value*".
 *option* can be any long command-line option without the leading `--`,
 for example:
 
@@ -209,7 +209,7 @@ opencode`):
 : Create default configuration files and exit.  You should run this
   first, before activating any jails.
 
-`-C` *file*, `--conf `*file*
+`-C` *file*, `--conf` *file*
 : Specifies the configuration file to read.  If *file* does not
   contain a `/`, the file is relative to `$HOME/.jai`.  Also, if
   *file* resides in `$HOME/.jai` and does not contain a `/`, you can
@@ -329,7 +329,7 @@ opencode`):
   variable, not a pattern, and it is assigned *value* in the jail.
 
     If *value* contains the pattern `${`*envvar*`}`, it will be
-  replaced by the value of the evironment variable *envvar* at the
+  replaced by the value of the environment variable *envvar* at the
   time jai was invoked.  If value contains `\`, it escapes the next
   character.
 
@@ -395,8 +395,8 @@ Jai sets the following environment variables inside jails:
 : Set to the mode (strict, bare, or casual) inside a jail.
 
 `JAI_JAIL`
-: Set to the name of the jai instance (specified by `-j` or `--jail`)
-  inside the jail.
+: Set to the selected jail name (specified by `-j` or `--jail`) inside
+  the jail.
 
 `JAI_USER`
 : Set to the name of the user who invoked jai.
@@ -412,7 +412,7 @@ setting the `JAI_CONFIG_DIR` environment variable.
   is used.
 
 `$HOME/.jai/.defaults`
-: Reasonable system defaults to be included in `defaults.conf` or
+: Reasonable system defaults to be included in `default.conf` or
   *cmd*`.conf`.  This file is created automatically by jai.  The file
   has no effect if you don't include it, but you should probably begin
   all configuration files with the line `conf .defaults` to get the
@@ -442,14 +442,14 @@ location can be changed by the `JAI_CONFIG_DIR` environment variable.
   anything user-accessible.  Every once in a while the overlay file
   system may create files in here that you cannot delete.  If you are
   trying to delete an overlay directory to start from scratch and
-  cannot delete this directory, try running `jay -u`, which will clean
+  cannot delete this directory, try running `jai -u`, which will clean
   things up.  If you specified `--storage=`*dir*, or used a symbolic
   link for your changes directory, then the work directory will always
   be next to the changes directory wherever that lives.
 
 `$HOME/.jai/default.home`, `$HOME/.jai/`*name*`.home`
 : Private home directory for bare and strict jails.  If you specified
-  `--storage=`*dir*, the these directories will be under *dir* instead
+  `--storage=`*dir*, these directories will be under *dir* instead
   of `$HOME/.jai`.
 
 The following paths are always fixed, regardless of environment
@@ -457,7 +457,7 @@ variables or command-line options:
 
 `/run/jai/$USER/default.home`, `/run/jai/$USER/`*name*`.home`
 : Home directories for casual jails.  You can delete files with
-  sensitive data in these jail directories to hide theme from jailed
+  sensitive data in these jail directories to hide them from jailed
   processes, or see the `--mask` option.
 
 `/run/jai/$USER/tmp/default`, `/run/jai/$USER/tmp/`*name*

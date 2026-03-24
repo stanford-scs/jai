@@ -42,10 +42,10 @@ const std::string jai_defaults =
 # mode bare
 # mode strict
 
-# You can use use "name NAME" to specify different jails.  For casual
+# You can use "jail NAME" to specify different jails.  For casual
 # jails, the home directory will be in /run/jai/$USER/NAME.home, and
 # changed files will be in $HOME/.jai/NAME.changes.  For strict jails,
-# the home directory will be $HOME/.jai/NAME.home.  If you leave name
+# the home directory will be $HOME/.jai/NAME.home.  If you leave jail
 # undefined, the name will be "default" and the mode will default to
 # casual, but if you define this to anything including "default", then
 # the default mode will be strict.
@@ -133,7 +133,7 @@ unsetenv SLACK_WEBHOOK_URL
 # substitute existing environment variables (before any
 # unsetenv/setenv have been applied) by including them in ${...}.  You
 # can reference ${JAI_USER} here, which gets set before configuration,
-# but not ${JAI_NAME} or ${JAI_MODE}, which are set after.
+# but not ${JAI_JAIL} or ${JAI_MODE}, which are set after.
 
 setenv USER=${JAI_USER}
 setenv LOGNAME=${JAI_USER}
