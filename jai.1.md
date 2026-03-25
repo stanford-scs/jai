@@ -206,8 +206,8 @@ opencode`):
 # OPTIONS
 
 `--init`
-: Create default configuration files and exit.  You should run this
-  first, before activating any jails.
+: Create default configuration files and exit.  Gives you a chance to
+  edit the default configuration files before creating any jails.
 
 `-C` *file*, `--conf` *file*
 : Specifies the configuration file to read.  If *file* does not

@@ -437,15 +437,13 @@ try_read_file(int dfd, path file)
 
 Fd
 ensure_file(int dfd, path file, std::string_view contents, int mode,
-            bool *created)
+            std::function<void(int)> createcb)
 {
   assert(!file.empty());
 
   if (Fd fd = openat(dfd, file.c_str(), O_RDONLY | O_CLOEXEC)) {
     if (!S_ISREG(xfstat(*fd).st_mode))
       err("{}: not a regular file", fdpath(dfd, file));
-    if (created)
-      *created = false;
     return fd;
   }
   if (errno != ENOENT)
@@ -469,8 +467,8 @@ ensure_file(int dfd, path file, std::string_view contents, int mode,
     syserr(R"(rename("{}" -> "{}") in "{}")", tmp.string(), file.string(),
            fdpath(*fd));
   cleanup.release();
-  if (created)
-    *created = true;
-  fd.reset();                   // have to reopen for reading
-  return xopenat(dfd, file.c_str(), O_RDONLY | O_CLOEXEC);
+  // have to reopen for reading
+  fd = xopenat(dfd, file.c_str(), O_RDONLY | O_CLOEXEC);
+  createcb(*fd);
+  return fd;
 }

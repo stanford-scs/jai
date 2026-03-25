@@ -295,8 +295,15 @@ read_file(int dfd, path file = {})
     throw res.error();
 }
 
-Fd ensure_file(int dfd, path file, std::string_view contents, int mode = 0600,
-               bool *created = nullptr);
+inline void
+create_warn(int fd)
+{
+  warn("created {}", fdpath(fd));
+}
+
+Fd ensure_file(
+    int dfd, path file, std::string_view contents, int mode = 0600,
+    std::function<void(int)> createcb = [](int) {});
 
 using ACL = RaiiHelper<acl_free, acl_t>;
 

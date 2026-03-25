@@ -1147,13 +1147,19 @@ The default is CMD.conf if it exists, otherwise default.conf)",
   if (!conf.mask_files_.empty())
     conf.mask_warn_ = true;
 
-  ensure_file(conf.home_jai(opt_init), ".defaults", jai_defaults, 0600);
-  ensure_file(conf.home_jai(), "default.conf", default_conf, 0600);
+  // true instead of opt_init, just so it works by default.
+  ensure_file(conf.home_jai(true), ".defaults", jai_defaults, 0600,
+              create_warn);
+  ensure_file(conf.home_jai(), "default.conf", default_conf, 0600, create_warn);
 
   if (opt_init) {
-    ensure_file(conf.storage(), "default.jail", default_jail, 0600);
-    std::println("You can edit the configuration defaults in {}/.defaults",
+    ensure_file(conf.storage(), "default.jail", default_jail, 0600,
+                create_warn);
+    std::println("You can edit the configuration defaults in {}/.defaults.",
                  conf.homejaipath_.string());
+    std::println(
+        "Run {} --print-defaults to see the original contents of that file.",
+        prog.filename().string());
     exit(0);
   }
 
@@ -1186,10 +1192,7 @@ The default is CMD.conf if it exists, otherwise default.conf)",
                            conf.sandbox_name_ == "default"
                                ? default_jail
                                : std::format("mode {}\n", conf.mode_),
-                           0600, &createwarn);
-
-  if (createwarn)
-    warn("created {}", fdpath(*dotjail));
+                           0600, create_warn);
   conf.parse_config_fd(*dotjail, conf.opt_parser(true).get());
 
   // Re-parse command line to override files
