@@ -92,10 +92,13 @@
 #include <concepts>
 #include <cstring>
 #include <format>
+#include <functional>
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace parseopt {
 
@@ -183,10 +186,56 @@ struct Option : std::string_view {
   }
 };
 
-class Options {
-public:
+struct Options {
+  struct Completions {
+    static constexpr int kNoCompletions = -1;
+    static constexpr int kRawCompletions = -3;
+    static constexpr int kArgCompletions = -4;
+
+    // If kind >= 0, then argv[kind] is the first non-option argument,
+    // meaning the first argument that is not a valid syntactic
+    // argument (at least 2 characters, first character '-', total
+    // length 2 if and only if the second argument is not '-').  If
+    // there is a "--" argument, then kind is the position after that.
+    //
+    // If kind is kNoCompletions, then something went wrong (an
+    // invalid argument somewhere) and nothing can be completed.
+    //
+    // If kind is kRawCompletions, then we are in the middle of an
+    // option, so vals contains the full names of completed arguments.
+    // E.g., if completing "-", it would include all options (both
+    // short and long).
+    //
+    // If kind is kArgCompletions, then vals must contain exactly 3
+    // elements as follows:
+    //
+    //    - arg[0] is the argument to be completed (e.g., "-d" or "--dir")
+    //
+    //    - arg[1] is the current prefix of the argument.  E.g., if
+    //      the argument being completed is "--dir=/usr/lo" or just
+    //      "/usr/lo" following "--dir", then it would be "/usr/lo".
+    //
+    //    - arg[2] is the prefix to prepend to completions generated.
+    //      In the case that the value is a separate argv element
+    //      (e.g., completing {"--dir", "/usr/lo"}) arg[2] will be
+    //      empty.  In the case that the option and argument are in
+    //      one argv element such as "--dir=/usr/lo" or "-mcasu", then
+    //      it argv[2] would be "--dir=" or "-m".
+    int kind = kNoCompletions;
+
+    std::vector<std::string> vals;
+
+    Completions() noexcept = default;
+    explicit Completions(int k) noexcept : kind(k) {}
+    Completions(int k, std::vector<std::string> v) noexcept
+      : kind(k), vals(std::move(v))
+    {}
+  };
+
   using enum Action::HasArg;
   using Error = OptionError;
+  std::map<std::string, std::shared_ptr<Action>, std::less<>> actions_;
+  std::string help_;
 
   Options &operator()(std::initializer_list<Option> options, is_action auto f,
                       std::string helpstr = {}, std::string valname = {})
@@ -253,143 +302,125 @@ public:
   template<std::convertible_to<std::string_view> S>
   std::span<S> parse_argspan(std::span<S> args)
   {
-    for (size_t i = 0; i < args.size(); ++i) {
-      auto optarg = std::string_view(args[i]);
-      if (optarg == "--")
-        return args.subspan(i + 1);
-      if (optarg.size() < 2 || optarg.front() != '-')
-        return args.subspan(i);
-      if (optarg[1] == '-') {
-        std::string_view opt, arg;
-        if (auto n = optarg.find('='); n == optarg.npos)
-          opt = optarg;
-        else {
-          opt = optarg.substr(0, n);
-          arg = optarg.substr(n);
-        }
-        auto &act = getopt(opt);
-        auto ha = act.has_arg();
-        if (!arg.empty()) {
-          if (ha == kNoArg)
-            err<Error>("option {} takes no argument", opt);
-          act(arg.substr(1));
-        }
-        else if (ha != kArg)
-          act();
-        else if (i + 1 == args.size())
-          err<Error>("option {} requires an argument", opt);
-        else
-          act(args[++i]);
+    using enum ScanItem::Kind;
+
+    auto res = scan_args(args);
+    for (const auto &item : res.scan) {
+      switch (item.kind) {
+      case kOption:
+        (*item.action)();
+        break;
+      case kOptionArg:
+        (*item.action)(item.arg);
+        break;
+      case kNeedNextArg:
+        err<Error>("option {} requires an argument", item.opt);
+      case kUnknownOption:
+        err<Error>("unknown option {}", item.opt);
+      case kUnexpectedArg:
+        err<Error>("option {} takes no argument", item.opt);
+      case kPositionalHere:
+      case kPositionalNext:
+        std::unreachable();
       }
-      else
-        for (size_t j = 1; j < optarg.size(); j++) {
-          auto &act = getopt(std::string({'-', optarg[j]}));
-          auto ha = act.has_arg();
-          if (ha == kNoArg) {
-            act();
-            continue;
-          }
-          if (j + 1 < optarg.size())
-            act(optarg.substr(j + 1));
-          else if (ha == kOptArg)
-            act();
-          else if (i + 1 == args.size())
-            err<Error>("option -{} requires an argument", optarg[j]);
-          else
-            act(args[++i]);
-          break;
-        }
     }
-    return {};
+    return args.subspan(res.positional);
   }
+
+  // Returns all valid completions for argv[argc-1].  Or, if at some
+  // point there is a non-option argument returns the position of the
+  // first non-option argument in CompletionResult::kind.
+  //
+  // argc and argv are the complete argument vectors from main.
+  //
+  // optind is where to start parsing arguments.  For example, if your
+  // program has a special mode "myprog --complete ..." to generate
+  // completions, then optind would start at 2 in order to skip the
+  // --complete argument that selects completion mode.
+  //
+  // Prefers a space after arguments with has_arg() == kArg, so will
+  // append a space instead of '=' when completing such long
+  // arguments, but also understands when there is an option such as
+  // "--dir=/usr/lo" and will an arg of {"--dir", "/usr/lo", "--dir="}
+  // (where arg[2] is what you need to prepend to completions of
+  // "/usr/lo" in the output).
+  Completions complete_args(int optind, int argc, char **argv);
 
   std::span<char *> parse_argv(int argc, char **argv)
   {
     return parse_argspan(std::span{argv + 1, argv + argc});
   }
 
-  void parse_file(std::string_view text, std::string_view errpath = {})
-  {
-    static constexpr std::string_view ws = " \t\r";
-    static constexpr std::string_view wsnl = " \t\r\n";
-    static constexpr std::string_view wsnleq = " \t\r\n=";
-    const size_t sz = text.size();
-    auto clamp = [sz](size_t n) { return std::min(n, sz); };
-    for (size_t pos = 0; pos < sz;) {
-      try {
-        if ((pos = text.find_first_not_of(wsnl, pos)) >= sz)
-          break;
-        if (text[pos] == '#') {
-          pos = text.find('\n', pos);
-          continue;
-        }
-        auto optend = clamp(text.find_first_of(wsnleq, pos));
-        std::string optarg = "--";
-        optarg += text.substr(pos, optend - pos);
-        if ((pos = text.find_first_not_of(ws, optend)) >= sz ||
-            text[pos] == '\n') {
-          parse_argspan(std::span{&optarg, 1});
-          continue;
-        }
-        if (text[pos] != '=')
-          optarg += '=';
-
-        bool escape = false, last_escaped = false;
-        for (; pos < sz && (escape || text[pos] != '\n'); ++pos) {
-          if (text[pos] == '\r')
-            continue;
-          if (!escape) {
-            last_escaped = false;
-            if (text[pos] == '\\')
-              escape = true;
-            else
-              optarg += text[pos];
-            continue;
-          }
-          escape = false;
-          last_escaped = true;
-          switch (text[pos]) {
-          case 't':
-            optarg += '\t';
-            break;
-          case 'r':
-            optarg += '\r';
-            break;
-          case 'n':
-            optarg += '\n';
-            break;
-          case '\n':
-            pos = clamp(text.find_first_not_of(ws, pos + 1) - 1);
-            break;
-          default:
-            optarg += text[pos];
-            break;
-          }
-        }
-        if (!last_escaped)
-          while (wsnl.contains(optarg.back()))
-            optarg.resize(optarg.size() - 1);
-        parse_argspan(std::span{&optarg, 1});
-      } catch (const Error &e) {
-        if (errpath.empty())
-          throw;
-        auto nnl = std::count(text.begin(), text.begin() + clamp(pos), '\n');
-        err<Error>("{}:{}: {}", errpath, nnl + 1, e.what());
-      }
-    }
-  }
+  void parse_file(std::string_view text, std::string_view errpath = {});
 
   const std::string &help() const { return help_; }
 
 private:
-  std::map<std::string, std::shared_ptr<Action>, std::less<>> actions_;
-  std::string help_;
+  struct ScanItem {
+    enum Kind {
+      kOption,         // Parsed a complete option with no attached argument.
+      kOptionArg,      // Parsed an option with an attached argument.
+      kNeedNextArg,    // Parsed an option that consumes the next argv element.
+      kPositionalHere, // The current argv element is the first positional arg.
+      kPositionalNext, // The next argv element is the first positional arg.
+      kUnknownOption,  // Saw an option name that is not registered.
+      kUnexpectedArg,  // Saw an argument attached to an option that takes none.
+    };
 
-  Action &getopt(std::string_view opt)
+    Kind kind = kUnknownOption;
+    std::string opt;
+    std::string_view arg;
+    Action *action = nullptr;
+
+    ScanItem(Kind k, std::string o = {}, std::string_view a = {},
+             Action *act = nullptr) noexcept
+      : kind(k), opt(std::move(o)), arg(a), action(act)
+    {}
+  };
+  using Scan = std::vector<ScanItem>;
+
+  struct ScanArgsResult {
+    Scan scan;
+    size_t positional; // index of first positions (non-options) argument
+  };
+
+  Action *get_action_ptr(std::string_view opt)
   {
     if (auto it = actions_.find(opt); it != actions_.end())
-      return *it->second;
-    err<OptionError>("unknown option {}", opt);
+      return it->second.get();
+    return nullptr;
+  }
+
+  Scan scan_arg(std::string_view optarg);
+
+  template<std::convertible_to<std::string_view> S>
+  ScanArgsResult scan_args(std::span<S> args)
+  {
+    using enum ScanItem::Kind;
+
+    ScanArgsResult ret{.scan = {}, .positional = args.size()};
+    for (size_t i = 0; i < args.size(); ++i) {
+      auto items = scan_arg(args[i]);
+      for (auto &item : items) {
+        if (item.kind == kPositionalHere) {
+          ret.positional = i;
+          return ret;
+        }
+        if (item.kind == kPositionalNext) {
+          ret.positional = i + 1;
+          return ret;
+        }
+        if (item.kind == kNeedNextArg && i + 1 < args.size()) {
+          item.kind = kOptionArg;
+          item.arg = args[++i];
+        }
+        ret.scan.push_back(std::move(item));
+        if (ret.scan.back().kind != kOption &&
+            ret.scan.back().kind != kOptionArg)
+          return ret;
+      }
+    }
+    return ret;
   }
 };
 
