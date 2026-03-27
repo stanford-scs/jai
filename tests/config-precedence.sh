@@ -43,3 +43,17 @@ EOF
 capture_in_dir "$WORKDIR" run_jai_with_env SRC_VALUE=expanded -C expand
 assert_status 0
 assert_output_line "EXPANDED=expanded"
+
+cat >"$CONFIG_DIR/expand-include.conf" <<'EOF'
+conf .defaults
+conf ${INCLUDE_FILE}
+command /usr/bin/env
+EOF
+
+capture_in_dir "$WORKDIR" run_jai_with_env INCLUDE_FILE=shared.conf -C expand-include
+assert_status 0
+assert_output_line "FROM_SHARED=shared"
+
+capture_in_dir "$WORKDIR" run_jai_with_env INCLUDE_FILE=expand-include.conf -C '${INCLUDE_FILE}'
+assert_status 1
+assert_contains "$CAPTURE_STDERR" '${INCLUDE_FILE}: no such configuration file'

@@ -11,8 +11,8 @@ assert_path_exists "$CONFIG_DIR/default.jail"
 
 capture run_jai --version
 assert_status 0
-assert_contains "$CAPTURE_STDOUT" "jai 0.1"
-assert_contains "$CAPTURE_STDOUT" "https://github.com/stanford-scs/jai"
+assert_contains "$CAPTURE_STDOUT" "Untrusted user for strict mode:"
+assert_contains "$CAPTURE_STDOUT" "This program comes with NO WARRANTY"
 
 capture run_jai --print-defaults
 assert_status 0

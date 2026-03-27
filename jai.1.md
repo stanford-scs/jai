@@ -165,11 +165,11 @@ environment before running the command.  For more complicated setup
 logic, you can use `setenv` to set the `BASH_ENV` environment variable
 to an initialization script to be sourced in non-interactive session.
 
-The `--dir`, `--xdir`, `--mask`, `--unmask`, `--setenv`, and
-`--storage` options will perform environment variable substitution for
-variable names contained within `${`...`}`, but the braces are
-required, unlike in the shell.  You can quote a literal `$` by
-preceding it with a backslash `\`.
+The `dir`, `xdir`, `mask`, `unmask`, `setenv`, and `storage` options,
+and `conf` options in configuration files will perform environment
+variable substitution for variable names contained within `${`...`}`.
+Note the braces are required, unlike in the shell.  You can quote a
+literal `$` or `\` by preceding it with a backslash `\`.
 
 # EXAMPLES
 
@@ -385,6 +385,9 @@ opencode`):
   otherwise `$HOME/.jai`.  However, if your home directory is on NFS
   you may wish to use storage on a local file system, as NFS does not
   support the extended attributes required by overlay file systems.
+  You can of course install a symbolic link for each individual home
+  directory, but `--storage` allows you to relocate the base directory
+  where all jails are located.
 
 `--command` *bash-command*
 : jai launches the jailed program you specify by running "`/bin/bash
@@ -487,8 +490,9 @@ location can be changed by the `JAI_CONFIG_DIR` environment variable.
   directly changing this directory, tear down and recreate the
   sandboxed home directory with `jai -u`.  The non-default version is
   used when you specify `-j` *name* on the command line.  If you
-  specified `--storage=`*dir*, the changes directory will be in *dir*
-  instead of `$HOME/.jai`.
+  specified `--storage=`*dir*, the changes directory will looked up
+  under *dir* instead of `$HOME/.jai` (though in either case may be a
+  symbolic link elsewhere).
 
 `$HOME/.jai/default.work`, `$HOME/.jai/`*name*`.work`
 : This "work" directory is required by overlayfs, but does not contain

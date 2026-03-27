@@ -26,9 +26,9 @@ Config::parse_config_fd(int fd, Options *opts)
   auto ld = fdpath(fd, true);
   if (auto [_it, ok] = config_loop_detect_.insert(ld); !ok)
     err<Options::Error>("configuration loop");
-  Defer _clear([this, ld, pch = parsing_config_file_] {
+  Defer _clear([this, ld, pcf = parsing_config_file_] {
     config_loop_detect_.erase(ld);
-    parsing_config_file_ = pch;
+    parsing_config_file_ = pcf;
   });
   parsing_config_file_ = true;
   auto go = [&](Options *o) { o->parse_file(read_file(fd), ld); };
@@ -1036,7 +1036,8 @@ Config::opt_parser(bool dotjail)
     opts("-j", "--jail", [](path) {
       err<Options::Error>("cannot set name from a .jail file or include");
     });
-  opts("--conf", [this, opts = ret.get()](path file) {
+  opts("--conf", [this, opts = ret.get()](std::string_view arg) {
+    path file(expand(arg));
     if (!parse_config_file(file, opts))
       err<Options::Error>("{}: configuration file not found", file.string());
   });

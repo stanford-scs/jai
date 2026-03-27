@@ -16,18 +16,15 @@
 
 extern "C" char **environ;
 
-inline const char *
-env_or_empty(std::string_view var)
-{
+inline const char *env_or_empty(std::string_view var) {
   const char *p = getenv(std::string(var).c_str());
   return p ? p : "";
 }
 
 // Calls exp("VAR"sv) to expand strings like "123${VAR}456".
-template<typename Exp = decltype(env_or_empty)>
-std::string
-var_expand(std::string_view in, Exp &&exp = env_or_empty)
-    requires requires(std::string r) { r += exp(in); }
+template <typename Exp = decltype(env_or_empty)>
+std::string var_expand(std::string_view in, Exp &&exp = env_or_empty)
+  requires requires(std::string r) { r += exp(in); }
 {
   std::string ret;
   for (std::size_t i = 0, e = in.size(); i < e;)
@@ -37,24 +34,19 @@ var_expand(std::string_view in, Exp &&exp = env_or_empty)
              in.substr(i, 2) == "${" && (j = in.find('}', i + 2)) != in.npos) {
       ret += exp(in.substr(i + 2, j - i - 2));
       i = j + 1;
-    }
-    else
+    } else
       ret += in[i++];
   return ret;
 }
 
-inline pid_t
-xfork(std::uint64_t flags = 0)
-{
+inline pid_t xfork(std::uint64_t flags = 0) {
   clone_args ca{.flags = flags, .exit_signal = SIGCHLD};
   if (auto ret = syscall(SYS_clone3, &ca, sizeof(ca)); ret != -1)
     return ret;
   syserr("clone3");
 }
 
-inline sigset_t
-sigsingleton(int sig)
-{
+inline sigset_t sigsingleton(int sig) {
   sigset_t ret;
   sigemptyset(&ret);
   sigaddset(&ret, sig);
@@ -135,14 +127,12 @@ struct Config {
   void check_user(const struct stat &sb, std::string path_for_error = {},
                   bool untrusted_ok = false);
   void check_user(int fd, std::string path_for_error = {},
-                  bool untrusted_ok = false)
-  {
+                  bool untrusted_ok = false) {
     check_user(xfstat(fd), path_for_error.empty() ? fdpath(fd) : path_for_error,
                untrusted_ok);
   }
   Fd ensure_udir(int dfd, const path &p, mode_t perm = 0700,
-                 FollowLinks follow = kFollow)
-  {
+                 FollowLinks follow = kFollow) {
     auto _restore = asuser();
     Fd fd = ensure_dir(dfd, p, perm, follow);
     check_user(*fd);
@@ -154,8 +144,7 @@ struct Config {
   int storage();
   int run_jai();
   int run_jai_user();
-  const path &cwd()
-  {
+  const path &cwd() {
     if (cwd_.empty()) {
       auto restore = asuser();
       cwd_ = canonical(std::filesystem::current_path());
@@ -169,25 +158,24 @@ struct Config {
   Fd make_private_run();
   Fd make_private_passwd();
 
-  const char *env_lookup(std::string_view var)
-  {
+  const char *env_lookup(std::string_view var) {
     if (auto it = setenv_.find(var); it != setenv_.end())
       if (auto pos = it->second.find('='); pos != it->second.npos)
         return it->second.c_str() + pos + 1;
     return env_or_empty(var);
   }
-  std::string expand(std::string_view in)
-  {
-    return var_expand(in, [this](std::string_view v) { return env_lookup(v); });
+  std::string expand(std::string_view in) {
+    return parsing_config_file_
+               ? var_expand(
+                     in, [this](std::string_view v) { return env_lookup(v); })
+               : std::string(in);
   }
 
-  static bool name_ok(path p)
-  {
+  static bool name_ok(path p) {
     return p.is_relative() && std::ranges::distance(p.begin(), p.end()) == 1 &&
            *p.c_str() != '.';
   }
-  void mask_warn()
-  {
+  void mask_warn() {
     if (mask_warn_) {
       warn(R"(--mask ignored because {5}/{0}/{1}.home already mounted.
 {2:>{3}}  Run "{4} -u" to unmount overlays.)",
@@ -198,10 +186,9 @@ struct Config {
   }
 };
 
-template<> struct std::formatter<Config::Mode> : std::formatter<const char *> {
+template <> struct std::formatter<Config::Mode> : std::formatter<const char *> {
   using super = std::formatter<const char *>;
-  auto format(Config::Mode m, auto &&ctx) const
-  {
+  auto format(Config::Mode m, auto &&ctx) const {
     using enum Config::Mode;
     switch (m) {
     case kStrict:
