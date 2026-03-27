@@ -14,7 +14,7 @@ jai.1: jai.1.md
 sysusersdir = $(prefix)/lib/sysusers.d
 sysusers_DATA = jai.conf
 
-bashcompdir = $(datadir)/bash-completion/helpers
+bashcompdir = $(datadir)/bash-completion/completions
 bashcomp_DATA = bash-completion/jai
 
 EXTRA_DIST = jai.1 jai.1.md jai.conf.in jai.bash logo.svg
