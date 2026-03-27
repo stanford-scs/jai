@@ -45,6 +45,7 @@ linux APIs to isolate processes and avoid time-of-check-to-time-of-use
 race conditions.  It will not work with kernels older than 6.13 or
 operating systems other than linux.
 
-See the [man page](jai.1.md) for more documentation.
+See the [home page](https://jai.scs.stanford.edu) or the [man
+page](jai.1.md) for more documentation.
 
 See the [INSTALL](INSTALL) file for installation instructions.

@@ -37,5 +37,5 @@ setuid executable.  You can run:
 
     sudo test/setup-setuid.sh
 
-to do this automatically in on /var/tmp, which is generally mounted
+to do this automatically in /var/tmp, which is generally mounted
 setuid capable.
