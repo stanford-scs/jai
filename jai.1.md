@@ -328,12 +328,13 @@ opencode`):
 `--mask` *file*
 : When creating an overlay home directory, create a "whiteout" file to
   hide *file* in the jail.  *file* must be a relative path and is
-  relative to your home directory.  You can specify this option
-  multiple times.  An easier way to hide files is just to delete them
-  from `/run/jai/$USER/*.home`; hence, this option is mostly useful in
-  configuration files to specify a set of files to delete by default.
-  If you add `mask` directives to your configuration file, you will
-  need to clear mounts with `jai -u` before the changes take effect.
+  always relative to your home directory, regardless of where you run
+  jai.  You can specify this option multiple times.  An easier way to
+  hide files is just to delete them from `/run/jai/$USER/*.home`;
+  hence, this option is mostly useful in configuration files to
+  specify a set of files to delete by default.  If you add `mask`
+  directives to your configuration file, you will need to clear mounts
+  with `jai -u` before the changes take effect.
 
 `--unmask` *file*
 : Reverse the effects of a previous `--mask` option.  This does not

@@ -3,7 +3,8 @@ bin_PROGRAMS = jai
 AM_CXXFLAGS = $(MOUNT_CFLAGS) $(LIBACL_CFLAGS)
 
 jai_SOURCES = complete.cc cred.cc default_conf.cc fs.cc jai.cc	\
-options.cc cred.h argtype.h defer.h err.h fs.h jai.h
+options.cc argtype.h config.h cred.h defer.h err.h fs.h jai.h	\
+options.h
 jai_LDADD = $(MOUNT_LIBS) $(LIBACL_LIBS)
 
 man1_MANS = jai.1
@@ -17,7 +18,7 @@ sysusers_DATA = jai.conf
 bashcompdir = $(datadir)/bash-completion/completions
 bashcomp_DATA = bash-completion/jai
 
-EXTRA_DIST = jai.1 jai.1.md jai.conf.in jai.bash logo.svg
+EXTRA_DIST = jai.1 jai.1.md jai.conf.in bash-completion/jai logo.svg
 
 CLEANFILES = *~
 DISTCLEANFILES = jai.conf
@@ -34,18 +35,22 @@ MAINTAINERCLEANFILES = \
 	$(srcdir)/install-sh \
 	$(srcdir)/missing
 
+JAI_USER = @UNTRUSTED_USER@
+
 install-exec-hook:
 	-chown root $(DESTDIR)$(bindir)/jai
 	-chmod 04511 $(DESTDIR)$(bindir)/jai
 
 install-data-hook:
 	test ! -r "$(DESTDIR)/etc/passwd" || \
-		systemd-sysusers --root="$(DESTDIR)/"
+		([[ "$(prefix)" == /usr || "$(prefix)" == /usr/local ]] && \
+		systemd-sysusers --root="$(DESTDIR)/") || :
 
 uninstall-hook:
-	@if test -r "$(DESTDIR)/etc/passwd" && \
+	@set -x; if test -r "$(DESTDIR)/etc/passwd" && \
+	[[ "$(prefix)" == /usr || "$(prefix)" == /usr/local ]] && \
 	gecos=$$(getent passwd @UNTRUSTED_USER@ 2>/dev/null | cut -d: -f5) \
 	    && test "$$gecos" = "JAI sandbox untrusted user"; then \
-	  echo "userdel @UNTRUSTED_USER@"; \
-	  userdel -R "$(DESTDIR)/" @UNTRUSTED_USER@; \
+	  echo "userdel $(JAI_USER)"; \
+	  userdel -R "$(DESTDIR)/" "$(JAI_USER)" || :; \
 	fi
