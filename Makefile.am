@@ -33,6 +33,7 @@ MAINTAINERCLEANFILES = \
 	$(srcdir)/aclocal.m4 \
 	$(srcdir)/configure \
 	$(srcdir)/Makefile.in \
+	$(srcdir)/config.h.in \
 	$(srcdir)/depcomp \
 	$(srcdir)/install-sh \
 	$(srcdir)/missing
