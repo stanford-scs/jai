@@ -575,8 +575,13 @@ Config::make_mnt_ns()
                           });
     xmnt_move(*source, *target);
   };
-  blockdir(storagedir_);
-  if (homejaipath_ != storagedir_)
+  // Don't try to block directories that are under the home path when
+  // home has already been replaced (strict/bare mode).  The paths are
+  // already inaccessible since they were under the original home.
+  if (mode_ == kCasual || !contains(homepath_, storagedir_))
+    blockdir(storagedir_);
+  if (homejaipath_ != storagedir_ &&
+      (mode_ == kCasual || !contains(homepath_, homejaipath_)))
     blockdir(homejaipath_);
 
   return newns;
