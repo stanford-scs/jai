@@ -250,7 +250,10 @@ make_whiteout(int dfd, const path &inp)
     }
 
     auto olduid = geteuid();
-    seteuid(0);
+    // Whiteout creation requires privilege escalation (setuid root).
+    // Assert we have the saved-set-uid to escalate.
+    if (olduid != 0 && seteuid(0))
+      syserr("make_whiteout: cannot escalate to root");
     int err = 0;
     if (mknodat(dfd, p.filename().c_str(), S_IFCHR, 0))
       err = errno;
@@ -403,7 +406,7 @@ read_fd(int fd)
 {
   std::string ret;
   if (auto sb = xfstat(fd); sb.st_size > 0x100'0000) {
-    // Let's not go crazy with sparse files and such
+    // 16MB limit to guard against huge or sparse files
     errno = EFBIG;
     syserr("{}", fdpath(fd));
   }

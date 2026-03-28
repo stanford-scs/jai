@@ -43,7 +43,8 @@ contains(const path &dir, const path &subpath)
   return std::ranges::mismatch(dir, subpath).in1 == dir.end();
 }
 
-// True is target matches pattern (with * expanded)
+// True if target matches pattern (with * expanded).
+// Recursion depth is bounded by target length.
 bool glob(std::string_view pattern, std::string_view target);
 
 // Compare paths component by component so subtrees are contiguous
@@ -292,6 +293,8 @@ xfstat(int fd, path file = {}, FollowLinks follow = kFollow)
   return sb;
 }
 
+// Read entire file into a string.  Rejects files larger than 16MB to
+// guard against accidentally reading huge or sparse files.
 std::string read_fd(int fd);
 
 // This tries to read a file.  It will return an error if the file

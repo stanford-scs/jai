@@ -25,6 +25,9 @@ AC_PATH_PROG([PATH_BASH], [bash], [/bin/bash])
 AC_DEFINE_UNQUOTED([PATH_BASH], ["$PATH_BASH"], [Path to bash])
 
 # --with-untrusted-user=USER (default: auto-detect from password file or "jai")
+# Note: this sets the compiled-in default username.  At runtime,
+# init_credentials() validates the user exists with the correct GECOS
+# field, so a mismatch between build and runtime environments is safe.
 AC_ARG_WITH([untrusted-user],
   [AS_HELP_STRING([--with-untrusted-user=USER],
     [name of untrusted sandbox user (default: autodetect or jai)])],

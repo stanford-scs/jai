@@ -52,7 +52,8 @@ template<typename Ent, auto IdFn, auto NamFn> struct DbEnt {
   {
     DbEnt ret;
     ret.buf_.resize(std::max(128uz, ret.buf_.capacity()));
-    for (;;) {
+    // Cap retries to avoid infinite loop if ERANGE persists (1MB limit)
+    for (int tries = 0; tries < 14; ++tries) {
       int r = fn(key, &ret.ent_, ret.buf_.data(), ret.buf_.size(), &ret.p_);
       if (!r)
         return ret ? std::move(ret) : DbEnt{};
@@ -63,6 +64,8 @@ template<typename Ent, auto IdFn, auto NamFn> struct DbEnt {
       else
         errno = r, syserr("DbEnt<{}>::find", typeid(Ent).name());
     }
+    errno = ERANGE;
+    syserr("DbEnt<{}>::find: buffer exceeded 1MB", typeid(Ent).name());
   }
 };
 using PwEnt = DbEnt<passwd, getpwuid_r, getpwnam_r>;

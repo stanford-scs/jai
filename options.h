@@ -259,6 +259,8 @@ struct Options {
       valname = "VAL";
     std::string optstr;
     for (const auto &opt : options) {
+      assert(!actions_.contains(std::string(opt)) &&
+             "duplicate option registration");
       actions_[std::string(opt)] = action;
       if (helpstr.empty())
         continue;

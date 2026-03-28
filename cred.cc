@@ -68,17 +68,20 @@ Credentials::get_user(const struct passwd *pw)
 std::vector<gid_t>
 Credentials::getgroups()
 {
-  int n = ::getgroups(0, nullptr);
-  if (n < 0)
-    syserr("getgroups");
-  auto ret = std::vector<gid_t>(size_t(n));
-  n = ::getgroups(ret.size(), ret.data());
-  if (size_t(n) == ret.size())
-    return ret;
-  else if (n < 0)
-    syserr("getgroups");
-  else
-    err("getgroups: expected {} groups but got {}", ret.size(), n);
+  // Retry loop handles the unlikely race where supplementary groups
+  // change between the sizing call and the filling call.
+  for (int tries = 0; tries < 3; ++tries) {
+    int n = ::getgroups(0, nullptr);
+    if (n < 0)
+      syserr("getgroups");
+    auto ret = std::vector<gid_t>(size_t(n));
+    n = ::getgroups(ret.size(), ret.data());
+    if (size_t(n) == ret.size())
+      return ret;
+    if (n < 0)
+      syserr("getgroups");
+  }
+  err("getgroups: group count keeps changing");
 }
 
 // Make a uid map mapping user to untrusted, leaving untrusted
