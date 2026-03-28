@@ -6,8 +6,9 @@ AM_CPPFLAGS = -I$(top_builddir) -I$(top_srcdir)/src
 AM_CXXFLAGS = $(MOUNT_CFLAGS) $(LIBACL_CFLAGS)
 
 jai_SOURCES = src/complete.cc src/cred.cc src/default_conf.cc	\
-src/fs.cc src/jai.cc src/options.cc src/argtype.h src/cred.h	\
-src/defer.h src/err.h src/fs.h src/jai.h src/options.h
+src/fs.cc src/jai.cc src/options.cc src/seccomp.cc		\
+src/argtype.h src/cred.h src/defer.h src/err.h src/fs.h	\
+src/jai.h src/options.h src/seccomp.h
 jai_LDADD = $(MOUNT_LIBS) $(LIBACL_LIBS)
 
 man1_MANS = jai.1

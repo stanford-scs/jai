@@ -1,4 +1,5 @@
 #include "jai.h"
+#include "seccomp.h"
 
 #include <cassert>
 #include <csignal>
@@ -977,6 +978,9 @@ try {
   setenv("JAI_MODE", std::format("{}", mode_).c_str(), 1);
   auto env = make_env();
 
+  if (seccomp_)
+    install_seccomp_filter();
+
   execvpe(argv0, argv, const_cast<char **>(env.data()));
   perror(argv0);
   _exit(1);
@@ -1104,6 +1108,9 @@ Config::opt_parser(bool dotjail)
       R"(Store overlay and private home directories in DIR
 (default: $JAI_CONFIG_DIR or $HOME/.jai))",
       "DIR");
+  opts(
+      "--no-seccomp", [this] { seccomp_ = false; },
+      "Disable seccomp syscall filtering");
   return ret;
 }
 

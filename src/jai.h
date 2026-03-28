@@ -81,6 +81,7 @@ struct Config {
   std::string shellcmd_;
   PathSet mask_files_;
   bool mask_warn_{};
+  bool seccomp_{true};
   bool parsing_config_file_{};
 
   std::string user_;
