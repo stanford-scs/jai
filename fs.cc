@@ -2,7 +2,6 @@
 #include "defer.h"
 
 #include <bit>
-#include <cassert>
 #include <cstring>
 #include <filesystem>
 
@@ -509,7 +508,7 @@ xfsetxattr(int fd, const char *attrname, std::span<const std::byte> val,
 
 namespace acl {
 
-template<typename T> requires std::is_standard_layout_v<T>
+template<typename T> requires std::is_trivially_copyable_v<T>
 inline void
 pushbytes(XattrVal &v, const T &t)
 {
@@ -553,28 +552,45 @@ serialize(const ACL &a)
   return ret;
 }
 
+template<typename T> requires std::is_trivially_copyable_v<T>
+struct unaligned {
+  std::byte storage_[sizeof(T)];
+  static constexpr size_t size()
+  {
+    static_assert(sizeof(unaligned) == sizeof(T));
+    return sizeof(T);
+  }
+  T get() const
+  {
+    T ret;
+    memcpy(&ret, storage_, size());
+    return ret;
+  }
+};
+
 ACL
 deserialize(const XattrVal &raw)
 {
-  if (raw.size() < sizeof(posix_acl_xattr_header) ||
-      (raw.size() - sizeof(posix_acl_xattr_header)) %
-          sizeof(posix_acl_xattr_entry))
+  using Hdr = unaligned<posix_acl_xattr_header>;
+  using Ent = unaligned<posix_acl_xattr_entry>;
+
+  if (raw.size() < Hdr::size() || ((raw.size() - Hdr::size()) % Ent::size()))
     err("acl::deseriralize: invalid size {} bytes", raw.size());
 
-  auto *h = reinterpret_cast<const posix_acl_xattr_header *>(raw.data());
-  if (auto v = loadle(h->a_version); v != POSIX_ACL_XATTR_VERSION)
+  auto h = reinterpret_cast<const Hdr *>(raw.data())->get();
+  if (auto v = loadle(h.a_version); v != POSIX_ACL_XATTR_VERSION)
     err("acl::deseriralize: invalid version {}", v);
 
-  size_t nentries = (raw.size() - sizeof(posix_acl_xattr_header)) /
-                    sizeof(posix_acl_xattr_entry);
-  std::span<const posix_acl_xattr_entry> rawentries(
-      reinterpret_cast<const posix_acl_xattr_entry *>(
-          raw.data() + sizeof(posix_acl_xattr_header)),
-      nentries);
+  size_t nentries = (raw.size() - Hdr::size()) / Ent::size();
+
+  std::span<const Ent> rawentries(
+      reinterpret_cast<const Ent *>(raw.data() + Hdr::size()), nentries);
 
   ACL ret;
   ret.reserve(nentries);
-  for (const auto &re : rawentries)
+  for (const auto re : rawentries | std::views::transform([](const Ent &ure) {
+                         return ure.get();
+                       }))
     ret.emplace_back(loadle(re.e_tag), loadle(re.e_id), loadle(re.e_perm));
   return ret;
 }
@@ -608,32 +624,25 @@ struct tagid {
 ACL
 normalize(const ACL &a)
 {
-  uint16_t mask = 0;
-  std::map<tagid, size_t> idx;
-  ACL out;
+  std::map<tagid, Entry> amap;
+  for (const auto &e : a)
+    amap.insert_or_assign(e, e);
 
-  for (size_t i = 0; i < a.size(); ++i) {
-    const auto &e = a[i];
-    if (e.tag != ACL_USER_OBJ)
-      mask |= e.perm;
-    if (auto it = idx.find(e); it != idx.end())
-      out[it->second] = e;
-    else {
-      idx[e] = out.size();
-      out.push_back(e);
-    }
+  // owner, filegroup, other, and mask must all exist
+  for (uint16_t tag : {ACL_USER_OBJ, ACL_GROUP_OBJ, ACL_OTHER})
+    amap.try_emplace(tag, Entry{tag, 0});
+  if (!amap.contains(ACL_MASK)) {
+    uint16_t bound = 0;
+    for (const auto &[_ti, e] : amap)
+      if (e.tag & (ACL_USER | ACL_GROUP_OBJ | ACL_GROUP))
+        bound |= e.perm;
+    amap.insert_or_assign(ACL_MASK, mask(bound));
   }
 
-  if (auto id = ACL_USER_OBJ; !idx.contains(id))
-    out.emplace_back(id, mask);
-  if (auto id = ACL_GROUP_OBJ; !idx.contains(id))
-    out.emplace_back(id, 0);
-  if (auto id = ACL_OTHER; !idx.contains(id))
-    out.emplace_back(id, 0);
-  if (auto id = ACL_MASK; !idx.contains(id))
-    out.emplace_back(id, mask);
-
-  std::ranges::sort(out);
+  ACL out;
+  out.reserve(amap.size());
+  for (const auto &[_it, e] : amap)
+    out.push_back(e);
   return out;
 }
 

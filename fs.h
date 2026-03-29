@@ -6,6 +6,7 @@
 #include "err.h"
 
 #include <algorithm>
+#include <cassert>
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -366,7 +367,9 @@ struct Entry {
   constexpr Entry(uint16_t t, Perm p) noexcept : tag(t), perm(p.val) {}
   constexpr Entry(uint16_t t, uint32_t i, Perm p) noexcept
     : tag(t), perm(p.val), id(i)
-  {}
+  {
+    assert(has_id() || id == ACL_UNDEFINED_ID);
+  }
 
   static constexpr char tag_char(uint16_t tag)
   {
