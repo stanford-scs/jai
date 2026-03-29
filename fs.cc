@@ -10,8 +10,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include <print> // XXX
-
 bool
 glob(std::string_view pattern, std::string_view target)
 {
@@ -69,7 +67,7 @@ fdpath(int fd, const path &file)
 PathMultiset
 mountpoints(const path &mountinfo)
 {
-  const auto mi = read_file(-1, mountinfo);
+  const auto mi = read_file(AT_FDCWD, mountinfo);
   PathMultiset ret;
 
   for (size_t pos = 0; pos < mi.size();) {
@@ -92,7 +90,7 @@ mountpoints(const path &mountinfo)
         const char *p = field.data() + i + 1;
         char c;
         auto [eptr, ec] = std::from_chars(p, p + 3, c, 8);
-        if (ec == std::errc{}) {
+        if (ec == std::errc{} && eptr == p + 3) {
           i += eptr - p;
           mp.push_back(c);
           continue;
@@ -100,7 +98,8 @@ mountpoints(const path &mountinfo)
       }
       mp.push_back(field[i]);
     }
-    ret.insert(std::move(mp));
+    if (!mp.empty() && mp[0] == '/')
+      ret.insert(std::move(mp));
   }
   return ret;
 }
