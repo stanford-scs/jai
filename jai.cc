@@ -834,8 +834,11 @@ Config::parent_loop(pid_t pid, int stop_requests)
     unsigned char buf[8];
     while ((n = read(rqfd, buf, sizeof(buf))) > 0)
       ret = buf[n - 1];
-    if (n == -1 && errno != EAGAIN && errno != EINTR)
-      syserr("read from stop_requests pipe");
+    if (n == -1 && errno != EAGAIN && errno != EINTR) {
+      static const char msg[] = "read from stop_request pipe failed\n";
+      write(2, msg, sizeof(msg)-1);
+      _exit(1);
+    }
     return ret;
   };
 

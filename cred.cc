@@ -68,17 +68,20 @@ Credentials::get_user(const struct passwd *pw)
 std::vector<gid_t>
 Credentials::getgroups()
 {
-  int n = ::getgroups(0, nullptr);
-  if (n < 0)
-    syserr("getgroups");
-  auto ret = std::vector<gid_t>(size_t(n));
-  n = ::getgroups(ret.size(), ret.data());
-  if (size_t(n) == ret.size())
-    return ret;
-  else if (n < 0)
-    syserr("getgroups");
-  else
-    err("getgroups: expected {} groups but got {}", ret.size(), n);
+  for (int i = 0; i < 4; ++i) {
+    int n = ::getgroups(0, nullptr);
+    if (n < 0)
+      syserr("getgroups");
+    auto ret = std::vector<gid_t>(size_t(n));
+    n = ::getgroups(ret.size(), ret.data());
+    if (n >= 0) {
+      if (size_t(n) > ret.size())
+        err("getgroups: expected {} groups but got {}", ret.size(), n);
+      ret.resize(n);
+      return ret;
+    }
+  }
+  err("getgroups: consistenly unable to get actual groups");
 }
 
 // Make a uid map mapping user to untrusted, leaving untrusted
