@@ -1,6 +1,8 @@
 
 * Changes in jai 0.3
 
+Added the --script, --conf?, and --dir! options.
+
 Removed dependencies on libmount, acl, and pkg-config to make it
 easier to compile.
 

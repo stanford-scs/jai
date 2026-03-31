@@ -292,12 +292,13 @@ opencode`):
   point of the `conf` directive, overriding previous lines and subject
   to being reversed by subsequent lines.
 
-`-d` *dir*, `--dir` *dir*
+`-d` *dir*, `--dir` *dir*, `--dir!` *dir*
 : Grant full access to directory *dir* and everything below in the
   jail.  You must own *dir*.  You can supply this option multiple
   times.  Note that on the command line, relative paths are relative
   to the current working directory, while in configuration files, they
-  are relative to your home directory.
+  are relative to your home directory.  The `--dir!` form creates the
+  directory if it didn't already exist.
 
 `-r` *dir*, `--rdir` *dir*, `--rdir?` *dir*
 : Like `--dir`, but grant _read-only_ access to directory *dir*.  Like

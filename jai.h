@@ -80,7 +80,8 @@ extern const std::string default_jairc;
 
 struct Config {
   enum Mode { kCasual, kBare, kStrict };
-  static constexpr int kGrantRO = 1;
+  static constexpr int kGrantRO = 1 << 0;
+  static constexpr int kGrantMkdir = 1 << 1;
 
   Mode mode_{kStrict};
   PathMap<int> grant_directories_;

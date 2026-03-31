@@ -208,11 +208,12 @@ is_dir_empty(int dirfd)
 
 Fd
 ensure_dir(int dfd, const path &p, mode_t perm, FollowLinks follow,
-           bool okay_if_other_owner)
+           bool okay_if_other_owner, std::function<void(int)> createcb)
 {
   assert(!p.empty());
 
   Fd fd;
+  bool created = false;
   int flag = follow == kFollow ? 0 : O_NOFOLLOW;
   if (p.is_absolute())
     dfd = *(fd = xopenat(-1, "/", O_RDONLY));
@@ -225,7 +226,8 @@ ensure_dir(int dfd, const path &p, mode_t perm, FollowLinks follow,
     else if (errno != ENOENT)
       syserr(R"(ensure_dir("{}"): open("{}"))", p.string(),
              fdpath(dfd, *component));
-    else if (mkdirat(dfd, component->c_str(), perm) && errno != EEXIST)
+    else if (created = !mkdirat(dfd, component->c_str(), perm),
+             !created && errno != EEXIST)
       syserr(R"(ensure_dir("{}"): mkdir("{}"))", p.string(),
              fdpath(dfd, *component));
     else if (struct stat sb; fstatat(dfd, component->c_str(), &sb, 0))
@@ -249,6 +251,8 @@ ensure_dir(int dfd, const path &p, mode_t perm, FollowLinks follow,
   }
   if (auto m = sb.st_mode & perm; m != (sb.st_mode & 07777) && fchmod(*fd, m))
     syserr(R"(fchmod("{}", {:o}))", p.string(), m);
+  if (created)
+    createcb(*fd);
   return fd;
 }
 

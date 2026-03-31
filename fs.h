@@ -160,8 +160,10 @@ bool is_fd_at_path(int targetfd, int dfd, const path &file,
 
 bool is_dir_empty(int dirfd);
 
-Fd ensure_dir(int dfd, const path &p, mode_t perm, FollowLinks follow,
-              bool okay_if_other_owner = false);
+Fd ensure_dir(
+    int dfd, const path &p, mode_t perm, FollowLinks follow,
+    bool okay_if_other_owner = false,
+    std::function<void(int)> createcb = [](int) {});
 
 void make_whiteout(int dfd, const path &p);
 

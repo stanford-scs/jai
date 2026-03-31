@@ -572,7 +572,10 @@ Config::make_mnt_ns()
           storagedir_.string());
     xsetns(*oldns, CLONE_NEWNS);
     auto restore_root = asuser();
-    Fd src = xopenat(-1, d, O_DIRECTORY | O_PATH | O_CLOEXEC);
+    Fd src =
+        flags & kGrantMkdir
+            ? ensure_dir(-1, d, 0777 & ~old_umask_, kFollow, false, create_warn)
+            : xopenat(-1, d, O_DIRECTORY | O_PATH | O_CLOEXEC);
     check_user(*src, d);
     restore_root.reset();
     src = clone_tree(*src); // Should it be recursive?
@@ -1084,6 +1087,15 @@ Config::opt_parser(bool dotjail)
       },
       "Grant full access to DIR.", "DIR");
   opts(
+      "--dir!",
+      [this](std::string_view arg) {
+        path d(expand(arg));
+        grant_directories_.emplace(
+            weakly_canonical(parsing_config_file_ ? homepath_ / d : d),
+            kGrantMkdir);
+      },
+      "like --dir, but create DIR if it doesn't exist", "DIR");
+  opts(
       "-r", "--rdir",
       [this](std::string_view arg) {
         path d(expand(arg));
@@ -1130,6 +1142,9 @@ Config::opt_parser(bool dotjail)
     path file(expand(arg));
     if (!parse_config_file(file, opts))
       err<Options::Error>("{}: configuration file not found", file.string());
+  });
+  opts("--conf?", [this, opts = ret.get()](std::string_view arg) {
+    parse_config_file(expand(arg), opts);
   });
   opts(
       "--script",
@@ -1260,6 +1275,7 @@ do_main(int argc, char **argv)
   bool opt_u{};
   std::vector<path> opt_d;
   path opt_C = "";
+  bool opt_C_optional{};
   bool opt_init{};
 
   auto opts = conf.opt_parser();
@@ -1270,11 +1286,22 @@ do_main(int argc, char **argv)
       "Create initial configuration files and exit");
   // Override inline conf to make CLI idempotent
   (*opts)(
-      "-C", "--conf", [&](path p) { opt_C = p; },
+      "-C", "--conf",
+      [&](path p) {
+        opt_C = p;
+        opt_C_optional = false;
+      },
       R"(Use FILE as configuration file.  A file FILE with no '/'
 is relative to $JAI_CONFIG_DIR if set, otherwise to ~/.jai.
 The default is CMD.conf if it exists, otherwise default.conf)",
       "FILE");
+  (*opts)(
+      "--conf?",
+      [&](path p) {
+        opt_C = p;
+        opt_C_optional = true;
+      },
+      R"(Like --conf, but no error if the file does not exist)", "FILE");
   (*opts)("--help", [] { usage(0); });
   (*opts)("--version", version, "Print copyright and version then exit");
   (*opts)(
