@@ -285,8 +285,9 @@ opencode`):
 
     Note that command-line arguments are parsed both before and after
   the file specified by the `-C` or `--conf` option.  Hence,
-  command-line options always take precedence over configuration
-  files.  When `conf` is specified in a configuration file, however,
+  command-line options always take precedence over configuration files
+  (though this works slightly differently for `--script`, described
+  below).  When `conf` is specified in a configuration file, however,
   the behavior is different.  The specified file is read at the exact
   point of the `conf` directive, overriding previous lines and subject
   to being reversed by subsequent lines.
