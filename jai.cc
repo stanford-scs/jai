@@ -755,9 +755,8 @@ Config::make_env()
     setenv_.try_emplace(std::string(sv), *e);
   }
 
-  auto env_view = setenv_ | std::views::transform([](auto &kv) {
-    return kv.second.c_str();
-  });
+  auto env_view =
+      setenv_ | std::views::values | std::views::transform(&std::string::c_str);
   std::vector<const char *> ret(env_view.begin(), env_view.end());
   ret.push_back(nullptr);
   return ret;

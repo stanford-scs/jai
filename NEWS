@@ -1,12 +1,18 @@
 
 * Changes in jai 0.3
 
+** New features
+
 Added the --script, --conf?, and --dir! options.
+
+Added the -r, --rdir, and --rdir? options.
+
+** Portability changes
+
+jai now compiles with g++14, despite only partial range support.
 
 Removed dependencies on libmount, acl, and pkg-config to make it
 easier to compile.
-
-Added the -r, --rdir, and --rdir? options.
 
 jai now compiles with clang libc++ (despite the lack of
 std::move_only_function).
