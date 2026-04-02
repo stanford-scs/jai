@@ -318,32 +318,42 @@ Config::make_home_overlay()
 }
 
 Fd
-Config::make_private_tmp()
+Config::make_private_tmproot()
 {
   auto r = lock_or_validate_file(
       run_jai_user(), "tmp", O_RDONLY | O_DIRECTORY,
       [](int fd) { return is_mountpoint(fd); }, ".lock");
   if (r)
-    return ensure_dir(**r, sandbox_name_, 01777, kNoFollow);
+    return std::move(*r);
 
   Fd tmp = ensure_dir(run_jai_user(), "tmp", 0755, kFollow);
   if (!is_mountpoint(*tmp)) {
-    xmnt_move(*make_tmpfs("jai-tmp", "gid", "0", "mode", "0755", "size", "40%"),
+    xmnt_move(*make_tmpfs("jai-tmp", "gid", "0", "mode", "0755", "size", "40%",
+                          "huge", "within_size"),
               *tmp);
   }
-  return ensure_dir(run_jai_user(), "tmp" / sandbox_name_, 01777, kNoFollow);
+  return xopenat(run_jai_user(), "tmp", O_RDONLY | O_NOFOLLOW);
 }
 
 Fd
-Config::make_private_run()
+Config::make_private_tmp(path subdir, bool userowned)
 {
-  ensure_dir(run_jai_user(), "tmp/.run", 0755, kNoFollow);
-  Fd fd = ensure_dir(run_jai_user(), "tmp/.run" / sandbox_name_, 0700,
-                     kNoFollow, true);
-  if (xfstat(*fd).st_uid != user_cred_.uid_ &&
-      fchown(*fd, user_cred_.uid_, user_cred_.gid_))
-    syserr("{}: fchown", fdpath(*fd));
-  return fd;
+  Fd fd = make_private_tmproot();
+  if (!subdir.empty()) {
+    assert(subdir.is_relative());
+    fd = ensure_dir(*fd, subdir, 0755, kNoFollow, false);
+  }
+
+  if (userowned) {
+    fd = ensure_dir(*fd, sandbox_name_, 0700, kNoFollow, true, [this](int fd) {
+      if (fchown(fd, user_cred_.uid_, user_cred_.gid_))
+        syserr("{}: fchown", fdpath(fd));
+    });
+    check_user(*fd);
+    return fd;
+  }
+  else
+    return ensure_dir(*fd, sandbox_name_, 01777, kNoFollow);
 }
 
 Fd
@@ -493,15 +503,12 @@ Config::make_mnt_ns()
   if (mode_ == kStrict)
     passwd = clone_tree(*make_private_passwd());
   path xdgrun = std::format("/run/user/{}", user_cred_.uid_);
-  Fd rundir;
-  if (!grant_directories_.contains(xdgrun)) {
-    if (struct stat sb; !stat(xdgrun.c_str(), &sb)) {
-      check_user(sb, xdgrun);
-      rundir = clone_tree(*make_private_run());
-    }
-    else if (errno != ENOENT)
-      syserr("{}", xdgrun.string());
-  }
+  Fd rundir = grant_directories_.contains(xdgrun)
+                  ? Fd{}
+                  : clone_tree(*make_private_tmp(".run", true));
+  Fd shmdir;
+  if (struct stat sb; !stat("/dev/shm", &sb) && S_ISDIR(sb.st_mode))
+    shmdir = clone_tree(*make_private_tmp(".shm"));
 
   Fd home;
   Fd mapns;
@@ -517,12 +524,9 @@ Config::make_mnt_ns()
     }
     home = clone_tree(*ensure_udir(storage(), cat(sandbox_name_, ".home")));
   }
-  xmnt_setattr(*tmp, attr);
-  xmnt_setattr(*home, attr);
-  if (passwd)
-    xmnt_setattr(*passwd, attr);
-  if (rundir)
-    xmnt_setattr(*rundir, attr);
+  for (int dfd : {*tmp, *home, *passwd, *rundir, *shmdir})
+    if (dfd != -1)
+      xmnt_setattr(dfd, attr);
 
   if (unshare(CLONE_NEWNS))
     syserr("unshare(CLONE_NEWNS)");
@@ -544,6 +548,10 @@ Config::make_mnt_ns()
     xmnt_move(*passwd, -1, "/etc/passwd");
   if (rundir)
     xmnt_move(*rundir, -1, xdgrun);
+  if (shmdir) {
+    umount2("/dev/shm", MNT_DETACH);
+    xmnt_move(*shmdir, -1, "/dev/shm");
+  }
 
   if (grant_cwd_) {
     if (!grant_directories_.contains(cwd())) {
