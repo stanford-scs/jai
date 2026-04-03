@@ -287,6 +287,8 @@ Config::make_blacklist(int dfd, path name)
 void
 Config::init_jail(int newhomefd)
 {
+  if (jailinit_.empty())
+    return;
   if (access(jailinit_.c_str(), X_OK))
     syserr("{}", jailinit_.string());
   if (auto pid = xfork()) {
@@ -335,6 +337,8 @@ Config::make_home_overlay()
 
   auto restore = asuser();
   auto chgpath = cat(sandbox_name_, ".changes");
+  bool need_init =
+      faccessat(storage(), chgpath.c_str(), 0, 0) && errno == ENOENT;
   Fd changes = make_blacklist(storage(), chgpath);
   Fd work = ensure_udir(*changes, ".." / cat(sandbox_name_, ".work"));
   restore.reset();
@@ -353,7 +357,8 @@ Config::make_home_overlay()
   restore = asuser();
   sandboxed_home =
       xopenat(run_jai_user(), sb, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
-  init_jail(*sandboxed_home);
+  if (need_init)
+    init_jail(*sandboxed_home);
   return sandboxed_home;
 }
 
@@ -1264,7 +1269,7 @@ Config::opt_parser(bool dotjail)
       "--initjail?",
       [this](path arg) {
         arg = weakly_canonical(parsing_config_file_ ? homejaipath_ / arg : arg);
-        if (access(jailinit_.c_str(), X_OK)) {
+        if (access(arg.c_str(), X_OK)) {
           if (errno == ENOENT)
             return;
           else
