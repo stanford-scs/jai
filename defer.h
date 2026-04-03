@@ -27,13 +27,31 @@ struct RaiiHelper {
   RaiiHelper(RaiiHelper &&other) noexcept : t_(other.release()) {}
   ~RaiiHelper() { reset(); }
 
+  void reset(T arg)
+  {
+    if (auto destroy_me = std::exchange(t_, std::move(arg));
+        destroy_me != Empty)
+      Destroy(std::move(destroy_me));
+  }
+
+  template<std::same_as<decltype(Empty)> TEmpty>
+  requires (!std::same_as<TEmpty, T>)
+  void reset(TEmpty e)
+  {
+    if (auto destroy_me = std::exchange(t_, std::move(e)); destroy_me != Empty)
+      Destroy(std::move(destroy_me));
+  }
+
+  void reset() noexcept(noexcept(reset(Empty))) { reset(Empty); }
+
   template<typename Arg>
-  requires is_one_of<std::decay_t<Arg>, T, decltype(Empty)>
   RaiiHelper &operator=(Arg &&arg) noexcept
+      requires requires { this->reset(std::forward<Arg>(arg)); }
   {
     reset(std::forward<Arg>(arg));
     return *this;
   }
+
   RaiiHelper &operator=(RaiiHelper &&other) noexcept
   {
     return *this = other.release();
@@ -58,16 +76,6 @@ struct RaiiHelper {
   decltype(auto) operator->(this auto &&self) noexcept { return (self.t_); }
 
   T release() noexcept { return std::exchange(t_, Empty); }
-
-  template<typename Arg>
-  requires is_one_of<std::decay_t<Arg>, T, decltype(Empty)>
-  void reset(Arg &&arg) noexcept(noexcept(Destroy(std::move(t_))))
-  {
-    if (auto destroy_me = std::exchange(t_, std::forward<Arg>(arg));
-        destroy_me != Empty)
-      Destroy(std::move(destroy_me));
-  }
-  void reset() noexcept(noexcept(reset(Empty))) { reset(Empty); }
 };
 
 namespace detail {

@@ -30,7 +30,7 @@ glob(std::string_view pattern, std::string_view target)
 }
 
 std::string
-fdpath(int fd, bool must)
+do_fdpath_must(int fd, bool must)
 {
   if (fd < 0 || fd == AT_FDCWD) {
     if (must)
@@ -216,7 +216,7 @@ ensure_dir(int dfd, const path &p, mode_t perm, FollowLinks follow,
   bool created = false;
   int flag = follow == kFollow ? 0 : O_NOFOLLOW;
   if (p.is_absolute())
-    dfd = *(fd = xopenat(-1, "/", O_RDONLY));
+    dfd = *(fd = xopenat(-1, "/", O_RDONLY | O_CLOEXEC));
   for (auto component = p.begin(); component != p.end();) {
     if (Fd nfd = openat(dfd, component->c_str(),
                         O_RDONLY | O_DIRECTORY | O_CLOEXEC | flag)) {

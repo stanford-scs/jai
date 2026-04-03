@@ -1,10 +1,12 @@
 #include "jai.h"
+#include "fs.h"
 #include "move_only_function.h"
 
 #include <cassert>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <filesystem>
 #include <linux/prctl.h>
 #include <print>
@@ -222,8 +224,10 @@ Config::run_jai()
   // Get rid of any partially set up directories
   recursive_umount(kRunRoot);
 
+  // Create with permission 0 until we have set propagation mode to
+  // private, so we don't accidentally mount things into sandboxes.
   xmnt_move(*make_tmpfs("run-jai", "size", "64M", "mode", "0", "gid", "0"),
-            *ensure_dir(-1, kRunRoot, 0755, kFollow));
+            *ensure_dir(-1, kRunRoot, 0, kFollow));
 
   Fd dirfd = xopenat(-1, kRunRoot, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   xmnt_propagate(*dirfd, MS_PRIVATE);
@@ -646,26 +650,10 @@ Config::make_mnt_ns()
   return newns;
 }
 
-void
-Config::unmount()
-{
-  Fd lock;
-  while (!(lock = open_lockfile(run_jai_user(), ".lock")))
-    ;
-
-  auto runuser = path(kRunRoot) / user_;
-  auto mp = runuser / cat(sandbox_name_, ".home");
-  umount2(mp.c_str(), UMOUNT_NOFOLLOW);
-  unlinkat(run_jai_user(), mp.filename().c_str(), AT_REMOVEDIR);
-
-  unlinkat(run_jai_user(), ".lock", 0);
-  lock.reset();
-  unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
-}
-
 static void
 clean_root_owned_dir(int dfd, path file)
 {
+  assert(components(file) == 1);
   Fd target = openat(dfd, file.c_str(),
                      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (!target) {
@@ -694,6 +682,66 @@ clean_root_owned_dir(int dfd, path file)
   }
 }
 
+void
+Config::clean_overlay_work(int dfd, path fname)
+{
+  Defer restore;
+  if (auto uid = geteuid()) {
+    restore = [uid] { seteuid(uid); };
+    seteuid(0);
+  }
+
+  auto d = xopendir(dfd, fname, kFollow);
+  check_user(dirfd(d));
+  while (auto de = readdir(d)) {
+    if (std::string_view name(d_name(de)); name == "." || name == "..")
+      continue;
+    if (struct stat sb;
+        fstatat(dirfd(d), d_name(de), &sb, AT_SYMLINK_NOFOLLOW) ||
+        !S_ISDIR(sb.st_mode) || sb.st_uid != 0)
+      continue;
+    clean_root_owned_dir(dirfd(d), d_name(de));
+  }
+}
+
+int
+Config::unmount()
+{
+  int ret = 0;
+  Fd lock;
+  while (!(lock = open_lockfile(run_jai_user(), ".lock")))
+    ;
+
+  auto runuser = path(kRunRoot) / user_;
+
+  if (mode_ == kCasual) {
+    auto mp = runuser / cat(sandbox_name_, ".home");
+    umount2(mp.c_str(), UMOUNT_NOFOLLOW);
+    if (unlinkat(run_jai_user(), mp.filename().c_str(), AT_REMOVEDIR) &&
+        errno != ENOENT)
+      ret = 1;
+    if (!ret)
+      try {
+        clean_overlay_work(storage(), cat(sandbox_name_, ".changes") / ".." /
+                                          cat(sandbox_name_, ".work"));
+      } catch (const std::exception &e) {
+        warn("{}", e.what());
+      }
+  }
+  if (mode_ == kStrict) {
+    auto mp = runuser / "passwd";
+    if (umount2(mp.c_str(), UMOUNT_NOFOLLOW) && errno != ENOENT)
+      ret = 1;
+    if (unlinkat(run_jai_user(), mp.filename().c_str(), 0) && errno != ENOENT)
+      ret = 1;
+  }
+
+  unlinkat(run_jai_user(), ".lock", 0);
+  lock.reset();
+  unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
+  return ret;
+}
+
 bool
 Config::unmountall()
 {
@@ -717,13 +765,8 @@ Config::unmountall()
         if (name.extension() == ".changes")
           try {
             path workpath = name / ".." / cat(name.stem(), ".work");
-            Fd work = xopenat(storage(), workpath.c_str(),
-                              O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-            check_user(*work);
-            restore.reset();
-            Defer _unrestore([&restore, this] { restore = asuser(); });
-            clean_root_owned_dir(*work, "work");
-            clean_root_owned_dir(*work, "index");
+
+            clean_overlay_work(dirfd(jd), workpath);
           } catch (const std::exception &e) {
             warn("{}", e.what());
           }
@@ -1351,13 +1394,10 @@ The default is CMD.conf if it exists, otherwise default.conf)",
     return 0;
   }
 
-  if (opt_u) {
-    if (!conf.grant_cwd_ || !conf.grant_directories_.empty() || !cmd.empty()) {
-      std::println(stderr, "-u is not compatible with -d, -D, or a command");
-      usage(2);
-    }
-    restore.reset();
-    return conf.unmountall() ? 0 : 1;
+  if (opt_u && !conf.grant_cwd_ || !conf.grant_directories_.empty() ||
+      !cmd.empty()) {
+    std::println(stderr, "-u is not compatible with -d, -D, or a command");
+    usage(2);
   }
 
   if (!opt_C.empty()) {
@@ -1373,8 +1413,14 @@ The default is CMD.conf if it exists, otherwise default.conf)",
   opts->parse_argv(argc, argv);
 
   bool createwarn = false;
-  if (conf.sandbox_name_.empty())
+
+  if (conf.sandbox_name_.empty()) {
+    if (opt_u) {
+      restore.reset();
+      return conf.unmountall();
+    }
     conf.sandbox_name_ = "default";
+  }
   Fd dotjail = ensure_file(conf.storage(), cat(conf.sandbox_name_, ".jail"),
                            conf.sandbox_name_ == "default"
                                ? default_jail
@@ -1386,6 +1432,12 @@ The default is CMD.conf if it exists, otherwise default.conf)",
   opts->parse_argv(argc, argv);
 
   restore.reset();
+
+  if (opt_u) {
+    conf.unmount();
+    return 0;
+  }
+
   if (geteuid() && !getenv("JAI_TRY_NONROOT"))
     err("{} requires root. Please run it with sudo or make it setuid root",
         prog.filename().string());
@@ -1409,7 +1461,7 @@ main(int argc, char **argv)
   else
     prog = PACKAGE_TARNAME;
 
-#if 1
+#if 0
   using ToCatch = std::exception;
 #else
   struct ToCatch {

@@ -86,7 +86,18 @@ subtree_rev(const is_one_of<PathSet, PathMultiset> auto &s, const path &root)
 }
 
 std::string fdpath(int fd, const path &file);
-std::string fdpath(int fd, bool must = false);
+
+inline std::string
+fdpath(int fd, std::same_as<bool> auto must)
+{
+  extern std::string do_fdpath_must(int fd, bool must);
+  return do_fdpath_must(fd, must);
+}
+inline std::string
+fdpath(int fd)
+{
+  return fdpath(fd, false);
+}
 
 PathMultiset mountpoints(const path &mountinfo = "/proc/self/mountinfo");
 
@@ -243,9 +254,9 @@ try_opendir(int dfd, path file = {}, FollowLinks follow = kNoFollow)
     // re-open in case dfd is O_PATH and to avoid messing with the
     // offset of dfd if we read the directory multiple times
     file = ".";
-  Fd fd =
-      openat(dfd, file.c_str(),
-             O_RDONLY | O_DIRECTORY | (follow == kNoFollow ? O_NOFOLLOW : 0));
+  Fd fd = openat(dfd, file.c_str(),
+                 O_RDONLY | O_DIRECTORY | O_CLOEXEC |
+                     (follow == kNoFollow ? O_NOFOLLOW : 0));
   if (!fd)
     return std::unexpected{
         std::system_error(errno, std::system_category(), fdpath(dfd, file))};

@@ -63,7 +63,7 @@ complete_config(int cfd, CompSet &c, std::string ext)
     std::string name = f.replace_extension();
     if (!name.starts_with(c.arg()))
       continue;
-    c.output("{}", name);
+    c.output("{} ", name);
   }
 }
 

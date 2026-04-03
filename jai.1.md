@@ -12,7 +12,7 @@ jai - Jail an AI agent
 
 `jai` `--init` \
 `jai` [*option*]...  [*cmd* [*arg*]...] \
-`jai` `-u`
+`jai` `-u` [`-j` *jail*]
 
 # DESCRIPTION
 
@@ -460,6 +460,14 @@ the bash `return` builtin, or can make variables read-only via the
   when first creating the overlay mount.  Hence, you must run `jai -u`
   before changing `--mask` options or directly editing the changes
   directory.
+
+    If you specify `-j` *jail* in addition to `-u`, jai will clean up
+  only one specific jail.  For a casual jail, this means unmounting
+  the overlay network and cleaning the work directory.  Strict jails
+  all share one copy of the password file (in which user `jai`'s home
+  directory has been changed to the invoking user's home directory).
+  `-u` will attempt to unmount and delete the password file, but may
+  not be able to if other strict jails are still in use.
 
 `--print-defaults`
 : Prints the default contents for `$HOME/.jai/.defaults`.

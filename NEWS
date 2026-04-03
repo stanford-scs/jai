@@ -3,9 +3,19 @@
 
 ** New features
 
-Added the --script, --conf?, and --dir! options.
+Allow -u and -j together to specify only one sandbox to unmount.
 
-Added the -r, --rdir, and --rdir? options.
+Sandboxes now mount a writable /dev/shm (accessible outside the
+sandbox under /run/jai/$USER/tmp/.shm/$JAI_JAIL).
+
+--conf?, and --dir! options, to ignore configuration files that don't
+exist and to create missing directories outside the sandbox.
+
+Added the --script and --script? options to assemble a startup script
+that can be sourced in the bash line specified by command.
+
+Added the -r, --rdir, and --rdir? options to export directories
+read-only.
 
 ** Portability changes
 

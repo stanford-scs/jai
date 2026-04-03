@@ -121,7 +121,7 @@ struct Config {
   Fd make_mnt_ns();
   path make_script();
   void exec(int nsfd, char **argv);
-  void unmount();
+  int unmount();
   bool unmountall();
   std::unique_ptr<Options> opt_parser(bool dotjail = false);
 
@@ -153,6 +153,7 @@ struct Config {
     check_user(*fd);
     return fd;
   }
+  void clean_overlay_work(int dfd, path fname);
 
   int home();
   int home_jai(bool create = false);
@@ -191,8 +192,7 @@ struct Config {
 
   static bool name_ok(path p)
   {
-    return p.is_relative() && std::ranges::distance(p.begin(), p.end()) == 1 &&
-           *p.c_str() != '.';
+    return p.is_relative() && components(p) == 1 && *p.c_str() != '.';
   }
   void mask_warn()
   {
