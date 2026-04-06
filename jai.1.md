@@ -695,9 +695,10 @@ occasionally they contain files, in which case it requires root
 privileges to delete the directories.  You can run `jai -u` to clean
 these up if you are unable to delete them.
 
-Overlayfs can be flaky.  If the attributes on the `default.changes`
-directory get out of sync, it may require making a new
-`default.changes` directory to get around mounting errors.
+Overlayfs can be flaky.  If a casual jail stops working, try
+unmounting it with `jai -u`.  If the attributes on the
+`default.changes` directory get out of sync, it may require making a
+new `default.changes` directory to get around mounting errors.
 
 If the jailed program terminates with a signal, jai exits with status
 255 rather than emulating the signal death.
